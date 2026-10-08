@@ -115,10 +115,10 @@ export const artifacts = {
   diamond: {
     id: 'diamond',
     icon: '◆',
-    name: 'Diamond Behind the Wall',
+    name: 'Suspicious Glass Shard',
     depth: 159999,
     rarity: 'Legendary',
-    description: 'It really was one block away. Unbelievable.',
+    description: 'Looked like a diamond. Turned out to be the previous miner’s glasses.',
   },
 }
 

@@ -4,7 +4,9 @@ import PixelButton from './PixelButton'
 export default function Header({
   artifactCount,
   soundEnabled,
+  shakeEnabled,
   onSoundToggle,
+  onShakeToggle,
   onJournalOpen,
   onWalletOpen,
   onResetOpen,
@@ -25,6 +27,17 @@ export default function Header({
           <span aria-hidden="true">▤</span>
           <span className="hud-button__label">JOURNAL</span>
           <b>{String(artifactCount).padStart(2, '0')}</b>
+        </motion.button>
+        <motion.button
+          className="hud-button hud-button--shake"
+          type="button"
+          onClick={onShakeToggle}
+          whileTap={{ scale: 0.94 }}
+          aria-pressed={shakeEnabled}
+          aria-label={shakeEnabled ? 'Disable screen shake' : 'Enable screen shake'}
+        >
+          <span aria-hidden="true">{shakeEnabled ? '≈' : '—'}</span>
+          <span className="hud-button__label">{shakeEnabled ? 'SHAKE ON' : 'NO SHAKE'}</span>
         </motion.button>
         <motion.button
           className="hud-button"

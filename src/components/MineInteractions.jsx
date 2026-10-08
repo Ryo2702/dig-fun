@@ -41,11 +41,14 @@ export function DraggableDebris({ cleared, onClear, playSound, onReact }) {
   )
 }
 
-export function RevealCrack({ onReact, playSound, message = 'THE NEXT BLOCK KNOWS.' }) {
+export function RevealCrack({ onReact, onStat, playSound, message = 'THE NEXT BLOCK KNOWS.' }) {
   const [revealed, setRevealed] = useState(false)
 
   function reveal() {
-    if (!revealed) playSound('secret')
+    if (!revealed) {
+      playSound('secret')
+      onStat?.('wallsInspected')
+    }
     setRevealed(true)
     onReact('inspect')
   }

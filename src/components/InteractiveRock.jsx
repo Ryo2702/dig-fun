@@ -9,6 +9,7 @@ export default function InteractiveRock({
   variant = 'stone',
   onDiscover,
   onReact,
+  onStat,
   playSound,
 }) {
   const [hits, setHits] = useState(discovered ? 3 : 0)
@@ -39,6 +40,7 @@ export default function InteractiveRock({
     )
 
     if (nextHits === 3) {
+      onStat?.('rocksBroken')
       gsap.to(rock, {
         scale: 0.72,
         opacity: 0,

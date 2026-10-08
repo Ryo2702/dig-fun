@@ -97,6 +97,8 @@ export default function useMineSound() {
       const oscillator = context.createOscillator()
       oscillator.connect(gain)
       const settings = {
+        metal: [1100, 720, 0.17, 'triangle'],
+        crystal: [196, 784, 1.2, 'sine'],
         discovery: [520, 1040, 0.42, 'square'],
         machine: [72, 46, 0.28, 'sawtooth'],
         explosion: [110, 28, 0.48, 'sawtooth'],

@@ -9,6 +9,9 @@ const stateLabels = {
   celebrate: 'celebrating a discovery',
   startled: 'reacting to the blast',
   inspect: 'inspecting the wall',
+  sleeping: 'sleeping on company time',
+  pointing: 'pointing at a suspicious reflection',
+  disappointed: 'considering a career in gardening',
 }
 
 export default function MinerCharacter({ state = 'walking', visible = true }) {

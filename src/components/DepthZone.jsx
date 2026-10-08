@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import { artifacts, mysteryTiles } from '../data/mineData'
 import InteractiveRock from './InteractiveRock'
 import DiscoveryReveal from './DiscoveryReveal'
+import MineralTunnel from './MineralMining'
 import {
   BlastPlunger,
   DraggableDebris,
@@ -75,6 +76,30 @@ function FossilDisplay({ onReact }) {
   )
 }
 
+function CaveCreature({ onReact, onStat, playSound }) {
+  const [awake, setAwake] = useState(false)
+
+  function disturb() {
+    if (awake) return
+    setAwake(true)
+    playSound('secret')
+    onReact('startled')
+    onStat('creaturesDisturbed')
+  }
+
+  return (
+    <button
+      type="button"
+      className={`cave-creature ${awake ? 'is-awake' : ''}`}
+      onClick={disturb}
+      aria-label={awake ? 'The cave creature is awake and annoyed' : 'Wake the sleeping cave creature'}
+      aria-pressed={awake}
+    >
+      <i /><i />
+    </button>
+  )
+}
+
 function SignalConsole({ found, onDiscover, playSound, onReact }) {
   const [sequence, setSequence] = useState(found ? 4 : 0)
   const signals = ['↑', '↓', '◁', '▷']
@@ -105,7 +130,7 @@ function SignalConsole({ found, onDiscover, playSound, onReact }) {
   )
 }
 
-function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake }) {
+function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake, onStat }) {
   const found = (id) => discoveries.some((item) => item.id === id)
 
   if (zone.kind === 'soil') {
@@ -137,9 +162,9 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
     return (
       <div className="zone-scene cave-scene">
         <div className="stalactites parallax-slow" aria-hidden="true">{dust.slice(0, 9).map((item) => <i key={item} style={{ '--i': item }} />)}</div>
-        <div className="cave-creature" aria-hidden="true"><i /><i /></div>
+        <CaveCreature onReact={onReact} onStat={onStat} playSound={playSound} />
         <div className="glow-shrooms" aria-hidden="true"><i /><i /><i /></div>
-        <RevealCrack onReact={onReact} playSound={playSound} message="TURN BACK? NICE TRY." />
+        <RevealCrack onReact={onReact} onStat={onStat} playSound={playSound} message="TURN BACK? NICE TRY." />
         <InteractiveRock
           artifact={artifacts.coin}
           discovered={found('coin')}
@@ -148,6 +173,7 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
           onDiscover={onDiscover}
           onReact={onReact}
           playSound={playSound}
+          onStat={onStat}
         />
         <div className="cave-sign" aria-hidden="true">PRICE<br />SUPPORT<br />↓</div>
       </div>
@@ -181,7 +207,7 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
         <div className="giant-skull parallax-slow" aria-hidden="true"><i /><i /><b /></div>
         <div className="giant-ribs" aria-hidden="true">{ribs.map((rib) => <i key={rib} style={{ '--i': rib }} />)}</div>
         <FossilDisplay onReact={onReact} />
-        <RevealCrack onReact={onReact} playSound={playSound} message="IT IS STILL HOLDING." />
+        <RevealCrack onReact={onReact} onStat={onStat} playSound={playSound} message="IT IS STILL HOLDING." />
         <div className="bone-worm" aria-hidden="true"><i /><i /><i /><i /><b>•</b></div>
       </div>
     )
@@ -198,6 +224,7 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
           playSound={playSound}
           onReact={onReact}
           onBlast={() => {
+            onStat('explosionsSurvived')
             onShake()
             window.setTimeout(() => onDiscover('ledger'), 520)
           }}
@@ -249,7 +276,7 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
         ))}
       </div>
       <div className="impossible-stairs" aria-hidden="true"><i /><i /><i /><i /><i /></div>
-      <RevealCrack onReact={onReact} playSound={playSound} message="ONE. MORE. BLOCK." />
+      <RevealCrack onReact={onReact} onStat={onStat} playSound={playSound} message="ONE. MORE. BLOCK." />
       <InteractiveRock
         artifact={artifacts.diamond}
         discovered={found('diamond')}
@@ -261,12 +288,13 @@ function ZoneScene({ zone, discoveries, onDiscover, playSound, onReact, onShake 
         }}
         onReact={onReact}
         playSound={playSound}
+        onStat={onStat}
       />
       <DiscoveryReveal
         visible={found('diamond')}
         icon={artifacts.diamond.icon}
-        title="IT WAS RIGHT THERE"
-        text="The meme was a documentary."
+        title="GLASS. OF COURSE."
+        text="Try the side tunnel. Sparkle is not a mineral certificate."
       />
     </div>
   )
@@ -280,6 +308,7 @@ export default function DepthZone({
   onDiscover,
   playSound,
   onReact,
+  onStat,
   onShake,
 }) {
   const sectionRef = useRef(null)
@@ -315,14 +344,15 @@ export default function DepthZone({
       </header>
       <div className="zone-index" aria-hidden="true">0{index + 1}</div>
       {nearby ? (
-        <ZoneScene
+        <><ZoneScene
           zone={zone}
           discoveries={discoveries}
           onDiscover={onDiscover}
           playSound={playSound}
           onReact={onReact}
+          onStat={onStat}
           onShake={onShake}
-        />
+        /><MineralTunnel zone={index} /></>
       ) : (
         <div className="zone-loading" aria-hidden="true"><span>DESCENDING…</span></div>
       )}

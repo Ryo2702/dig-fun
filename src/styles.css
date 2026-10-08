@@ -125,6 +125,64 @@ a:focus-visible {
 .site-header::before { top: -2px; left: -2px; }
 .site-header::after { right: -2px; bottom: -2px; }
 
+.activity-feed {
+  position: fixed;
+  z-index: 68;
+  top: 80px;
+  left: 18px;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 7px 6px 10px;
+  border: 2px solid #493b2c;
+  background: rgba(9, 7, 6, 0.93);
+  box-shadow: 4px 4px #030202;
+}
+
+.activity-feed__signal { display: flex; align-items: flex-end; gap: 2px; width: 17px; height: 17px; }
+.activity-feed__signal i { width: 3px; height: 5px; background: #76654c; }
+.activity-feed__signal i:nth-child(2) { height: 10px; }
+.activity-feed__signal i:nth-child(3) { height: 16px; }
+.activity-feed.is-live .activity-feed__signal i { background: var(--cyan); animation: signal-pulse 1.2s steps(3) infinite; }
+.activity-feed.is-demo .activity-feed__signal i { background: var(--gold); }
+.activity-feed.is-offline .activity-feed__signal i { background: var(--red); }
+@keyframes signal-pulse { 50% { opacity: 0.35; } }
+
+.activity-feed__copy { display: flex; min-width: 190px; flex-direction: column; gap: 3px; }
+.activity-feed__copy strong { color: #cdb88e; font-size: 8px; letter-spacing: 0.1em; }
+.activity-feed__copy span { color: #756957; font-size: 8px; }
+.activity-feed > button {
+  min-height: 28px;
+  padding: 5px 7px;
+  border: 1px solid #5b4932;
+  color: #d8b865;
+  background: #1d160f;
+  cursor: pointer;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.activity-event {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  min-width: 190px;
+  padding: 9px 12px;
+  border-left: 4px solid var(--cyan);
+  background: #0c1211;
+  box-shadow: 4px 4px #030202;
+}
+.activity-event b,
+.activity-event small { display: block; }
+.activity-event b { color: #b8efe2; font-size: 10px; }
+.activity-event small { margin-top: 3px; color: #587a72; font-size: 7px; letter-spacing: 0.1em; }
+.activity-event--wave,
+.activity-event--blast { border-color: var(--gold); background: #1c120a; }
+.activity-event--wave b,
+.activity-event--blast b { color: #ffd36b; }
+
 .mini-logo {
   display: inline-flex;
   align-items: baseline;
@@ -979,6 +1037,10 @@ a:focus-visible {
 .miner-wrap[data-state='looking'] .miner-pick { transform: rotate(-15deg); }
 .miner-wrap[data-state='tired'] .miner-sprite { transform: translateY(7px) rotate(3deg); }
 .miner-wrap[data-state='tired'] .miner-pick { transform: rotate(-5deg); }
+.miner-wrap[data-state='sleeping'] .miner-sprite { transform: translateY(14px) rotate(8deg); }
+.miner-wrap[data-state='sleeping'] .miner-head { transform: translateY(3px); }
+.miner-wrap[data-state='sleeping'] .miner-pick { transform: rotate(8deg); }
+.miner-wrap[data-state='sleeping']::after { position: absolute; top: -22px; right: -18px; content: 'zZ'; color: #b7e5dc; font-size: 13px; font-weight: 900; animation: miner-bob 1.2s steps(2) infinite; }
 .miner-wrap[data-state='celebrate'] .miner-arm { transform: rotate(155deg); }
 .miner-wrap[data-state='celebrate'] .miner-pick { transform: rotate(205deg); }
 .miner-wrap[data-state='startled'] .miner-sprite { animation: miner-startle 0.15s steps(2) 4; }
@@ -1497,6 +1559,9 @@ a:focus-visible {
   right: 17%;
   width: 82px;
   height: 42px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   animation: creature-peek 4s steps(4) infinite;
 }
 
@@ -1511,6 +1576,8 @@ a:focus-visible {
 .cave-creature i { position: absolute; z-index: 2; top: 20px; width: 7px; height: 7px; background: #d7ff74; box-shadow: 0 0 8px #c8ff5a; }
 .cave-creature i:first-child { left: 26px; }
 .cave-creature i:last-child { right: 26px; }
+.cave-creature.is-awake { animation: miner-startle 0.15s steps(2) 5; }
+.cave-creature.is-awake i { background: #ff795c; box-shadow: 0 0 10px #ff3d2e; }
 @keyframes creature-peek { 0%, 78%, 100% { transform: translateY(35px); opacity: 0; } 84%, 94% { transform: translateY(0); opacity: 1; } }
 
 .glow-shrooms { position: absolute; bottom: 9%; left: 13%; width: 170px; height: 100px; }
@@ -1994,6 +2061,22 @@ a:focus-visible {
 .journal-intro { margin: 18px 0 10px; color: #9b8c75; font-size: 11px; line-height: 1.5; }
 .journal-progress { height: 8px; margin-bottom: 22px; border: 2px solid #554633; background: #090706; }
 .journal-progress span { display: block; height: 100%; background: var(--gold); transition: width 0.3s steps(5); }
+.miner-stats,
+.journal-section-heading { position: relative; }
+.miner-stats { margin: 0 0 24px; padding: 15px; border: 3px solid #4f4232; background: rgba(13, 10, 8, 0.95); box-shadow: 5px 5px #070504; }
+.journal-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; margin-bottom: 12px; }
+.journal-section-heading h3 { margin: 0; color: #e9d7b3; font-size: 18px; text-transform: uppercase; }
+.journal-section-heading span { color: #8c743f; font-size: 7px; font-weight: 900; letter-spacing: 0.13em; }
+.journal-section-heading--artifacts { margin-top: 28px; }
+.miner-stats__grid { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid #3c3227; border-left: 1px solid #3c3227; }
+.miner-stats__grid > div { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border-right: 1px solid #3c3227; border-bottom: 1px solid #3c3227; }
+.miner-stats__grid span { color: #746755; font-size: 7px; font-weight: 900; letter-spacing: 0.05em; }
+.miner-stats__grid b { color: #e4bf61; font-size: 11px; white-space: nowrap; }
+.save-tools { display: flex; gap: 8px; margin-top: 13px; }
+.save-tools button { flex: 1; padding: 9px; border: 2px solid #5d4b34; color: #ddc28a; background: #17110c; cursor: pointer; font-size: 8px; font-weight: 900; letter-spacing: 0.08em; }
+.save-tools button:hover { border-color: var(--gold); }
+.save-tools input { display: none; }
+.save-status { margin: 10px 0 0; color: #9d8c70; font-size: 9px; line-height: 1.4; }
 .artifact-list { display: grid; gap: 12px; }
 
 .artifact-card {
@@ -2039,6 +2122,7 @@ a:focus-visible {
 
 @media (max-width: 900px) {
   .site-header { top: 8px; right: 8px; left: 8px; }
+  .activity-feed { top: 68px; left: 8px; }
   .hud-button__label,
   .text-control { display: none; }
   .hud-button { padding: 7px; }
@@ -2065,6 +2149,10 @@ a:focus-visible {
   .hud-button > span:first-child { width: 25px; height: 25px; }
   .hud-button b { display: none; }
   .wallet-button { min-height: 34px; max-width: 85px; padding: 6px 7px; font-size: 7px; line-height: 1.2; }
+  .activity-feed { right: 8px; width: auto; min-height: 36px; }
+  .activity-feed__copy { min-width: 0; flex: 1; }
+  .activity-feed__copy span { display: none; }
+  .activity-event { min-width: 170px; }
 
   .depth-meter {
     top: auto;
@@ -2164,6 +2252,7 @@ a:focus-visible {
   .wallet-option__mark { width: 42px; height: 42px; }
   .reset-actions { flex-direction: column; }
   .artifact-journal { padding: 24px 16px 80px; border-left: 0; }
+  .miner-stats__grid { grid-template-columns: 1fr; }
   .artifact-card { grid-template-columns: 60px 1fr; gap: 11px; min-height: 130px; padding: 11px; }
   .artifact-card__icon { height: 60px; font-size: 28px; }
   .discovery-toast { bottom: 74px; }

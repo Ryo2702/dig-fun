@@ -6,15 +6,6 @@ import DepthZone from './DepthZone'
 
 gsap.registerPlugin(ScrollTrigger)
 
-function progressToDepth(progress) {
-  if (progress >= 1) return zones.at(-1).endDepth
-  const scaled = Math.max(0, progress) * zones.length
-  const index = Math.min(zones.length - 1, Math.floor(scaled))
-  const localProgress = scaled - index
-  const zone = zones[index]
-  return zone.startDepth + (zone.endDepth - zone.startDepth) * localProgress
-}
-
 export default function MineWorld({
   discoveries,
   onDepthChange,
@@ -22,23 +13,38 @@ export default function MineWorld({
   onDiscover,
   playSound,
   onReact,
+  onStat,
   shakeSignal,
   onShake,
 }) {
   const worldRef = useRef(null)
   const cameraRef = useRef(null)
   const idleTimer = useRef(null)
+  const sleepTimer = useRef(null)
   const lastDepth = useRef(-1)
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    let boundaries = []
+    const measure = () => {
+      boundaries = [...worldRef.current.querySelectorAll('.depth-zone')].map((node, index) => ({
+        top: node.getBoundingClientRect().top + window.scrollY,
+        height: node.offsetHeight,
+        zone: zones[index],
+      }))
+    }
+    measure()
     const context = gsap.context(() => {
       ScrollTrigger.create({
         trigger: worldRef.current,
         start: 'top top',
         end: 'bottom bottom',
+        onRefresh: measure,
         onUpdate: (self) => {
-          const depth = progressToDepth(self.progress)
+          const y = window.scrollY
+          const boundary = boundaries.findLast((item) => y >= item.top) || boundaries[0]
+          const fraction = Math.max(0, Math.min(1, (y - boundary.top) / boundary.height))
+          const depth = boundary.zone.startDepth + (boundary.zone.endDepth - boundary.zone.startDepth) * fraction
           if (Math.abs(depth - lastDepth.current) > 1 || self.progress === 1) {
             lastDepth.current = depth
             onDepthChange(depth, self.progress)
@@ -48,10 +54,15 @@ export default function MineWorld({
             const velocity = Math.abs(self.getVelocity())
             onScrollState(velocity > 1350 ? 'running' : 'walking')
             window.clearTimeout(idleTimer.current)
+            window.clearTimeout(sleepTimer.current)
             idleTimer.current = window.setTimeout(
-              () => onScrollState(depth > 50000 ? 'tired' : 'looking'),
-              180,
+              () => {
+                onScrollState('tired')
+                onStat('timesAlmostGivingUp')
+              },
+              5000,
             )
+            sleepTimer.current = window.setTimeout(() => onScrollState('sleeping'), 12000)
           }
         },
       })
@@ -76,11 +87,21 @@ export default function MineWorld({
       }
     }, worldRef)
 
+    let resizeTimer
+    const observer = new ResizeObserver(() => {
+      window.clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(() => ScrollTrigger.refresh(), 150)
+    })
+    observer.observe(worldRef.current)
+
     return () => {
+      observer.disconnect()
+      window.clearTimeout(resizeTimer)
       window.clearTimeout(idleTimer.current)
+      window.clearTimeout(sleepTimer.current)
       context.revert()
     }
-  }, [onDepthChange, onScrollState])
+  }, [onDepthChange, onScrollState, onStat])
 
   useEffect(() => {
     if (!shakeSignal || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -105,6 +126,7 @@ export default function MineWorld({
             onDiscover={onDiscover}
             playSound={playSound}
             onReact={onReact}
+            onStat={onStat}
             onShake={onShake}
           />
         ))}

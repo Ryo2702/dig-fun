@@ -1,7 +1,9 @@
+import { useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { artifacts as artifactCatalog } from '../data/mineData'
-import { formatDepth } from '../utils/storage'
+import { formatDepth, parseProgress } from '../utils/storage'
 import useModalFocus from '../hooks/useModalFocus'
+import { MineralJournal } from './MineralMining'
 
 function formatTimestamp(value) {
   if (!value) return 'Undiscovered'
@@ -13,9 +15,47 @@ function formatTimestamp(value) {
   }).format(new Date(value))
 }
 
-export default function ArtifactJournal({ open, discoveries, onClose }) {
+const statLabels = {
+  rocksBroken: 'ROCKS BROKEN',
+  wallsInspected: 'WALLS INSPECTED',
+  emptyRooms: 'EMPTY ROOMS',
+  explosionsSurvived: 'EXPLOSIONS SURVIVED',
+  timesAlmostGivingUp: 'ALMOST GAVE UP',
+  oneMoreBlockDiscoveries: 'ONE MORE BLOCKS',
+  creaturesDisturbed: 'CREATURES DISTURBED',
+}
+
+export default function ArtifactJournal({ open, deepest, discoveries, stats, mining, onImport, onClose }) {
   const panelRef = useModalFocus(open, onClose)
+  const inputRef = useRef(null)
+  const [importStatus, setImportStatus] = useState('')
   const found = new Map(discoveries.map((item) => [item.id, item]))
+
+  function exportSave() {
+    const file = new Blob([JSON.stringify({ version: 1, deepest, artifacts: discoveries, stats, mining }, null, 2)], { type: 'application/json' })
+    const href = URL.createObjectURL(file)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = 'dig-fun-save.json'
+    link.click()
+    URL.revokeObjectURL(href)
+  }
+
+  async function importSave(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 8 * 1024 * 1024) {
+      setImportStatus('Save rejected: file is too large.')
+      return
+    }
+    try {
+      onImport(parseProgress(await file.text()))
+      setImportStatus('Save imported. The mine remembers.')
+    } catch {
+      setImportStatus('Save rejected: not valid DIG.FUN field notes.')
+    }
+  }
 
   return (
     <AnimatePresence>
@@ -50,6 +90,31 @@ export default function ArtifactJournal({ open, discoveries, onClose }) {
             </p>
             <div className="journal-progress" aria-hidden="true">
               <span style={{ width: `${discoveries.length / Object.keys(artifactCatalog).length * 100}%` }} />
+            </div>
+            <section className="miner-stats" aria-labelledby="stats-title">
+              <div className="journal-section-heading">
+                <span>LOCAL / BROWSER ONLY</span>
+                <h3 id="stats-title">Miner log</h3>
+              </div>
+              <div className="miner-stats__grid">
+                <div><span>DEEPEST DESCENT</span><b>{formatDepth(deepest)}</b></div>
+                <div><span>ARTIFACTS FOUND</span><b>{discoveries.length}</b></div>
+                {Object.entries(statLabels).map(([key, label]) => (
+                  <div key={key}><span>{label}</span><b>{Math.floor(stats[key] || 0)}</b></div>
+                ))}
+                <div><span>DIGGING TIME</span><b>{Math.floor((stats.diggingSeconds || 0) / 60)}m {Math.floor((stats.diggingSeconds || 0) % 60)}s</b></div>
+              </div>
+              <div className="save-tools">
+                <button type="button" onClick={exportSave}>EXPORT SAVE ↓</button>
+                <button type="button" onClick={() => inputRef.current?.click()}>IMPORT / REPLACE SAVE ↑</button>
+                <input ref={inputRef} type="file" accept="application/json,.json" onChange={importSave} />
+              </div>
+              {importStatus && <p className="save-status" role="status">{importStatus}</p>}
+            </section>
+            <MineralJournal />
+            <div className="journal-section-heading journal-section-heading--artifacts">
+              <span>RECOVERED &amp; SUSPECTED</span>
+              <h3>Artifacts</h3>
             </div>
             <div className="artifact-list">
               {Object.values(artifactCatalog).map((artifact, index) => {

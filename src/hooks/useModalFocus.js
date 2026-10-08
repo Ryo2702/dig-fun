@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react'
 export default function useModalFocus(open, onClose) {
   const panelRef = useRef(null)
 
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useEffect(() => {
     if (!open) return undefined
     const previous = document.activeElement
@@ -13,11 +15,11 @@ export default function useModalFocus(open, onClose) {
     focusable?.focus()
 
     function handleKeyDown(event) {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') closeRef.current()
       if (event.key !== 'Tab' || !panel) return
       const items = [...panel.querySelectorAll(
         'button, a[href], input, [tabindex]:not([tabindex="-1"])',
-      )].filter((item) => !item.disabled)
+      )].filter((item) => !item.disabled && item.getClientRects().length)
       if (!items.length) return
       const first = items[0]
       const last = items.at(-1)
@@ -37,7 +39,7 @@ export default function useModalFocus(open, onClose) {
       document.body.classList.remove('modal-open')
       previous?.focus?.()
     }
-  }, [open, onClose])
+  }, [open])
 
   return panelRef
 }
