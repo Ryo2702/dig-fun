@@ -89,3 +89,23 @@ test('easy dig still refuses an unsafe drop', () => {
   const g = createGame(); for (let y = 9; y <= 15; y++) g.removed[keyOf(9, y)] = true
   tick(g, { digDown: true }, 3); assert.equal(g.broken, 0); assert.match(g.notice, /Unsafe/)
 })
+
+test('surface lift preserves rewards and terrain, even when the entrance floor is gone', async () => {
+  const { returnToSurface } = await import('../src/utils/world.js')
+  const g = createGame(); g.player.x = 10.175; g.player.y = 110.1; g.player.vy = 9
+  g.deepest = 10.3; g.sol.balance = 125; g.sol.total = 125; g.solSession = 125; g.inventory.gold = 2; g.artifacts = [{ id: '12,26', outcome: 'clue' }]
+  for (let y = 8; y <= 20; y++) g.removed[`9,${y}`] = true
+  const removed = JSON.stringify(g.removed); g.escapeUntil = 3; g.recover = 1; g.fallStart = 70
+  returnToSurface(g); tick(g, {}, 2)
+  assert.equal(g.player.x, 6.175); assert.equal(g.player.y, 7.1); assert.equal(g.player.vy, 0)
+  assert.equal(g.deepest, 10.3); assert.equal(g.sol.balance, 125); assert.equal(g.solSession, 125)
+  assert.equal(g.inventory.gold, 2); assert.equal(g.artifacts.length, 1); assert.equal(JSON.stringify(g.removed), removed)
+  assert.equal(g.escapeUntil, 0); assert.equal(g.recover, 0)
+  const next = restore(serialize(g, DEFAULT_SETTINGS)).g; tick(next); assert.equal(next.player.y, 7.1)
+})
+test('context hints explain initial SOL earning, deep return, and drill cooldown', async () => {
+  const { gameplayHint } = await import('../src/utils/world.js'); const g = createGame()
+  assert.match(gameplayHint(g).text, /Soil earns no SOL/)
+  g.sol.total = 3; g.player.y = 40; assert.match(gameplayHint(g).text, /SURFACE LIFT/)
+  g.cooldown = 2; assert.match(gameplayHint(g).title, /cooling/)
+})

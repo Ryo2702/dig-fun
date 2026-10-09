@@ -24,7 +24,7 @@ export default function SolCounter({ sol, reduced, onOpen }) {
   return <div className="sol-counter-wrap">
     <button className={`sol-counter ${shining ? 'sol-shine' : ''}`} onClick={onOpen} aria-label={`SOL balance: ${formatSOL(sol.balance)}. View SOL information.`}>
       <span className="sol-mark" aria-hidden="true"><i /><i /><i /></span>
-      <span><small>SOL BALANCE</small><strong>{formatSOL(shown)}</strong></span>
+      <span><small>SOL BALANCE · TAP FOR DETAILS</small><strong>{formatSOL(shown)}</strong></span>
     </button>
     <small className="sol-disclaimer">In-Game SOL — No Real Monetary Value</small>
     {flight && <span key={flight.id} className="sol-reward-flight" aria-hidden="true">+{formatSOL(flight.amount)}</span>}

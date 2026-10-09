@@ -53,6 +53,27 @@ export const solid = type => !!MATERIALS[type] || type === 'debris'
 export function createGame() {
   return { player: { x: 9.15, y: 7.05, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false }, removed: {}, damage: {}, drops: [], inventory: {}, sol: emptySOL(), solSession: 0, artifacts: [], deepest: 0, broken: 0, tool: 0, heat: 0, cooldown: 0, target: { x: 9, y: 8 }, seen: {}, particles: [], time: 0, lastHit: -1, notice: 'Start here: hold DIG DOWN to break the floor. A / D to explore.', noticeUntil: 7, scanner: 0, scannerReady: 0, recover: 0, reactUntil: 0, shake: 0, lastMove: 0, checkpoint: { x: 9.15, y: 7.05 } }
 }
+export function returnToSurface(g) {
+  // The permanent entrance ladder stays usable even after the surface floor is mined out.
+  Object.assign(g.player, { x: 6.175, y: 7.1, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false })
+  g.checkpoint = { x: g.player.x, y: g.player.y }
+  g.target = null; g.jumpHeld = false; g.fallStart = null; g.recover = 0; g.escapeUntil = 0; g.reactUntil = 0; g.shake = 0
+  say(g, 'Back at the entrance. Your SOL and discoveries are safe. Move right to explore again.')
+  reveal(g)
+}
+export function gameplayHint(g) {
+  if (g.recover > 0) return { title: 'Catch your breath', text: 'Your rewards are safe. Use SURFACE LIFT if you are stuck.' }
+  if (g.cooldown > 0) return { title: 'Your drill is cooling', text: 'Release Mine for a moment. It will work again when the heat drops.' }
+  if (g.target) {
+    const info = targetInfo(g)
+    if (info.type === 'casing' && info.reachable) return { title: 'An artifact!', text: 'Press Interact beside it. Some artifacts contain SOL; others hold clues.' }
+    if (g.player.grounded && info.locked && info.reason?.startsWith('Unsafe')) return { title: 'Unsafe drop', text: 'Move sideways and dig a safer route, or take the free SURFACE LIFT.' }
+    if (info.locked && info.reason?.startsWith('Stronger')) return { title: 'Upgrade your tool', text: 'Break ordinary rock to unlock tools. Choose a brighter slot in the belt below.' }
+  }
+  if (!g.sol.total) return { title: 'Earn your first SOL', text: 'Soil earns no SOL. Walk a little right, then hold DIG DOWN to reach copper. Nearby ore becomes SOL automatically.' }
+  if (g.player.y > 17) return { title: 'Go up whenever you want', text: 'Tap SURFACE LIFT for a free trip home. You keep every reward. Hold Up on ladders to climb normally.' }
+  return { title: 'Choose your next block', text: 'Walk left or right. Hold a nearby block to mine, or tap it then hold Mine on mobile. Tap SOL BALANCE for reward details.' }
+}
 export function say(g, message) { if (g.notice !== message || g.noticeUntil < g.time) { g.notice = message; g.noticeUntil = g.time + 3.5 } }
 export const playerTile = g => ({ x: Math.floor(g.player.x + .325), y: Math.floor(g.player.y + .45) })
 export function unlocked(g, i) { return i >= 0 && i < TOOLS.length && g.broken >= TOOLS[i].unlock }
