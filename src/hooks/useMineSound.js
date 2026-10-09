@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 function makeNoise(context, duration = 0.08) {
   const length = Math.floor(context.sampleRate * duration)
@@ -10,8 +10,7 @@ function makeNoise(context, duration = 0.08) {
   return buffer
 }
 
-export default function useMineSound() {
-  const [enabled, setEnabled] = useState(false)
+export default function useMineSound(musicEnabled = false, enabled = false) {
   const contextRef = useRef(null)
   const ambienceRef = useRef(null)
 
@@ -21,7 +20,7 @@ export default function useMineSound() {
       if (!AudioContext) return null
       contextRef.current = new AudioContext()
     }
-    if (contextRef.current.state === 'suspended') contextRef.current.resume()
+    if (contextRef.current.state === 'suspended') contextRef.current.resume().catch(() => {})
     return contextRef.current
   }, [])
 
@@ -64,11 +63,10 @@ export default function useMineSound() {
     ambienceRef.current = [low, distant, filter, master]
   }, [getContext])
 
-  const toggle = useCallback(() => {
-    if (enabled) stopAmbience()
-    else startAmbience()
-    setEnabled(!enabled)
-  }, [enabled, startAmbience, stopAmbience])
+  useEffect(() => {
+    if (musicEnabled) startAmbience()
+    else stopAmbience()
+  }, [musicEnabled, startAmbience, stopAmbience])
 
   const play = useCallback(
     (name) => {
@@ -117,8 +115,9 @@ export default function useMineSound() {
 
   useEffect(() => () => {
     stopAmbience()
-    contextRef.current?.close()
+    contextRef.current?.close().catch(() => {})
+    contextRef.current = null
   }, [stopAmbience])
 
-  return { enabled, toggle, play }
+  return { play }
 }
