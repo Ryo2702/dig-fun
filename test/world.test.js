@@ -79,3 +79,13 @@ test('downward digging plants the miner over the tile when standing across a sea
   const g = createGame(); g.player.x = 10.67; tick(g); g.target = { x: 10, y: 8 }; tick(g, { mine: true }, .7)
   tick(g); assert.equal(g.broken, 1); assert.equal(g.deepest, .1)
 })
+
+test('easy dig follows the miner downward and stops immediately on release', () => {
+  const g = createGame(); tick(g, { digDown: true }, 2.5)
+  assert.ok(g.broken >= 2); assert.ok(g.deepest >= .2)
+  const broken = g.broken; tick(g, {}, 2); assert.equal(g.broken, broken)
+})
+test('easy dig still refuses an unsafe drop', () => {
+  const g = createGame(); for (let y = 9; y <= 15; y++) g.removed[keyOf(9, y)] = true
+  tick(g, { digDown: true }, 3); assert.equal(g.broken, 0); assert.match(g.notice, /Unsafe/)
+})

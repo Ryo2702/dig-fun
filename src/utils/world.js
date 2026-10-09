@@ -1,3 +1,4 @@
+import { emptySOL, normalizeSOL, awardSOL, rewardAmount, DEPTH_REWARDS } from './sol.js'
 export const WIDTH = 80, HEIGHT = 180, SURFACE = 8, TILE = 16
 export const SAVE_KEY = 'dig-fun-world-v2'
 export const MATERIALS = {
@@ -50,7 +51,7 @@ export function baseTile(x, y) {
 export function tile(g, x, y) { return g.removed[keyOf(x, y)] ? 'air' : baseTile(x, y) }
 export const solid = type => !!MATERIALS[type] || type === 'debris'
 export function createGame() {
-  return { player: { x: 9.15, y: 7.05, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false }, removed: {}, damage: {}, drops: [], inventory: {}, artifacts: [], deepest: 0, broken: 0, tool: 0, heat: 0, cooldown: 0, target: null, seen: {}, particles: [], time: 0, lastHit: -1, notice: 'A / D to move. Point at a neighboring block and hold to mine.', noticeUntil: 7, scanner: 0, scannerReady: 0, recover: 0, reactUntil: 0, shake: 0, lastMove: 0, checkpoint: { x: 9.15, y: 7.05 } }
+  return { player: { x: 9.15, y: 7.05, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false }, removed: {}, damage: {}, drops: [], inventory: {}, sol: emptySOL(), solSession: 0, artifacts: [], deepest: 0, broken: 0, tool: 0, heat: 0, cooldown: 0, target: { x: 9, y: 8 }, seen: {}, particles: [], time: 0, lastHit: -1, notice: 'Start here: hold DIG DOWN to break the floor. A / D to explore.', noticeUntil: 7, scanner: 0, scannerReady: 0, recover: 0, reactUntil: 0, shake: 0, lastMove: 0, checkpoint: { x: 9.15, y: 7.05 } }
 }
 export function say(g, message) { if (g.notice !== message || g.noticeUntil < g.time) { g.notice = message; g.noticeUntil = g.time + 3.5 } }
 export const playerTile = g => ({ x: Math.floor(g.player.x + .325), y: Math.floor(g.player.y + .45) })
@@ -86,7 +87,7 @@ export function turnDial(g, artifact, index) {
   artifact.dials ||= [0, 0, 0]
   artifact.dials[index] = (artifact.dials[index] + 1) % 3
   artifact.solved = artifact.dials.every((value, i) => value === [1, 2, 0][i])
-  if (artifact.solved) { say(g, 'Ancient seal decoded. Sealed walls can now be mined.'); g.sound = 'discovery' }
+  if (artifact.solved) { awardSOL(g, `puzzle:${artifact.id}`, rewardAmount('puzzle', artifact.id), 'ANCIENT SEAL'); g.sound = 'discovery' }
 }
 export function interact(g) {
   const p = playerTile(g)
@@ -99,7 +100,7 @@ export function interact(g) {
     g.removed[id] = true
     g.artifacts.push({ id, outcome, solved: false, turns: 0, dials: [0, 0, 0] })
     if (outcome === 'component') { g.broken = Math.max(g.broken, 6); say(g, 'Tool component recovered. Reinforced Pickaxe unlocked!') }
-    else if (outcome === 'reward') { g.inventory.gold = (g.inventory.gold || 0) + 3; say(g, 'Old cache: Gold Ore Collected ×3') }
+    else if (outcome === 'reward') awardSOL(g, `artifact:${id}`, rewardAmount('artifact', id), 'RARE ARTIFACT')
     else if (outcome === 'hazard') { g.recover = 1; g.player.state = 'damage'; g.shake = .3; say(g, 'Dust trap! Pouch and progress are safe.') }
     else say(g, ({ puzzle: 'A three-mark lock. Saved unfinished in your Artifact Journal.', clue: 'Field note: follow the broken white seams.', cosmetic: 'Recovered: the foreman’s green scarf.', map: 'Map fragment: old chambers repeat every 14 layers.', funny: 'A tiny frog says: “one more block.” Then leaves.', empty: 'An empty lunch box. Someone was here first.' })[outcome])
     if (outcome === 'funny') g.frog = { x: casing.x, y: casing.y, until: g.time + 4 }
@@ -125,6 +126,7 @@ export function scan(g) {
   g.scanner = 2.5; g.scannerReady = g.time + 8; say(g, 'Scanner: faint seams, not promises. Move close to inspect.'); g.sound = 'secret'
 }
 export function step(g, input, dt, settings = DEFAULT_SETTINGS) {
+  const mining = input.mine || input.digDown
   dt = Math.min(dt, .035); g.time += dt
   const p = g.player, pos = playerTile(g), tool = TOOLS[g.tool]
   g.scanner = Math.max(0, g.scanner - dt); g.recover = Math.max(0, g.recover - dt); g.shake = Math.max(0, g.shake - dt)
@@ -133,7 +135,7 @@ export function step(g, input, dt, settings = DEFAULT_SETTINGS) {
   const wasGrounded = p.grounded, oldVx = p.vx
   p.grounded = collides(g, p.x, p.y + .035)
   let direction = (input.right ? 1 : 0) - (input.left ? 1 : 0)
-  if (g.recover || input.mine) direction = 0
+  if (g.recover || mining) direction = 0
   p.vx = direction * 3.5
   if (direction) {
     const nx = p.x + p.vx * dt
@@ -166,10 +168,11 @@ export function step(g, input, dt, settings = DEFAULT_SETTINGS) {
   if (!p.grounded && !ladder && g.fallStart == null) g.fallStart = p.y
   if (g.recover) p.state = 'damage'
   else if (g.reactUntil < g.time) p.state = ladder && (input.up || input.down) ? 'climbing' : p.vy < -.1 ? 'jumping' : p.vy > .8 ? 'falling' : direction ? 'walking' : input.down ? 'crouching' : g.time - g.lastMove > 15 ? 'tired' : 'idle'
-  if (input.down && !ladder && !input.mine) g.target = { x: playerTile(g).x, y: playerTile(g).y + 1 }
-  if (input.up && !ladder && !input.mine) g.target = { x: playerTile(g).x, y: playerTile(g).y - 1 }
-  if (input.mine && !g.target) g.target = { x: pos.x + p.facing, y: pos.y }
-  if (input.mine && !g.recover) {
+  if (input.down && !ladder && !mining) g.target = { x: playerTile(g).x, y: playerTile(g).y + 1 }
+  if (input.up && !ladder && !mining) g.target = { x: playerTile(g).x, y: playerTile(g).y - 1 }
+  if (input.digDown) g.target = { x: playerTile(g).x, y: playerTile(g).y + 1 }
+  if (mining && !g.target) g.target = { x: pos.x + p.facing, y: pos.y }
+  if (mining && !g.recover && (!input.digDown || p.grounded)) {
     const info = targetInfo(g)
     if (!info.reachable || info.locked) say(g, info.reason)
     else if (g.cooldown) { p.state = 'tired'; say(g, 'OVERHEATED · cooling down. Release Mine.'); }
@@ -199,9 +202,14 @@ export function step(g, input, dt, settings = DEFAULT_SETTINGS) {
   if (foot === 'lava') { p.x = g.checkpoint.x; p.y = g.checkpoint.y; p.vy = 0; g.recover = 1.4; say(g, 'Lava! Returned to solid ground. All discoveries kept.'); g.sound = 'explosion' }
   if (p.grounded && foot !== 'lava') g.checkpoint = { x: p.x, y: p.y }
   const depth = Math.max(0, (Math.floor(p.y + .9) - SURFACE) / 10); g.deepest = Math.max(g.deepest, depth)
+  for (const [milestone, reward] of Object.entries(DEPTH_REWARDS)) if (depth >= Number(milestone)) awardSOL(g, `depth:${milestone}`, reward, `${milestone} M DEPTH MILESTONE`)
+  const location = playerTile(g), chamber = Math.floor(location.y / 14)
+  if (location.y > 14 && location.y % 14 >= 10 && location.y % 14 <= 12 && location.x > 4 && location.x < 15 + chamber % 3 * 8 && baseTile(location.x, location.y) === 'air') awardSOL(g, `chamber:${chamber}`, rewardAmount('chamber', String(chamber)), 'SECRET CHAMBER')
   g.drops = g.drops.filter(drop => {
     if (Math.hypot(drop.x + .5 - (p.x + .325), drop.y + .5 - (p.y + .45)) > 1.35 || g.time - drop.born < .4) return true
-    g.inventory[drop.type] = (g.inventory[drop.type] || 0) + drop.amount; say(g, `${drop.type === 'sol' ? 'SOL Crystal' : drop.type[0].toUpperCase() + drop.type.slice(1) + ' Ore'} Collected ×${drop.amount}`)
+    g.inventory[drop.type] = (g.inventory[drop.type] || 0) + drop.amount
+    const deposit = keyOf(drop.x, drop.y)
+    awardSOL(g, `ore:${deposit}`, rewardAmount(drop.type, deposit), drop.type === 'sol' ? 'SOL CRYSTAL' : `${drop.type.toUpperCase()} DEPOSIT`)
     p.state = 'celebrating'; g.reactUntil = g.time + .7; g.sound = drop.type === 'sol' ? 'crystal' : 'discovery'; if (drop.type === 'sol') g.shake = .6
     return false
   })
@@ -225,7 +233,7 @@ export function reveal(g) {
   }
 }
 export function serialize(g, settings) {
-  return { version: 2, player: { x: g.player.x, y: g.player.y }, removed: g.removed, damage: g.damage, drops: g.drops.map(d => ({ ...d, born: -.5 })), inventory: g.inventory, artifacts: g.artifacts, deepest: g.deepest, broken: g.broken, tool: g.tool, seen: g.seen, settings }
+  return { version: 2, player: { x: g.player.x, y: g.player.y }, removed: g.removed, damage: g.damage, drops: g.drops.map(d => ({ ...d, born: -.5 })), inventory: g.inventory, sol: g.sol, artifacts: g.artifacts, deepest: g.deepest, broken: g.broken, tool: g.tool, seen: g.seen, settings }
 }
 const validCell = id => typeof id === 'string' && /^\d{1,2},\d{1,3}$/.test(id) && Number(id.split(',')[0]) > 0 && Number(id.split(',')[0]) < WIDTH - 1 && Number(id.split(',')[1]) > 0 && Number(id.split(',')[1]) < HEIGHT - 1
 const finite = (n, min, max) => typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max
@@ -234,6 +242,7 @@ export function restore(value) {
   if (!value || value.version !== 2) return { g, settings }
   for (const name of ['removed', 'seen', 'damage']) for (const [id, v] of Object.entries(value[name] || {}).slice(0, WIDTH * HEIGHT)) if (validCell(id) && (name === 'damage' ? finite(v, 0, 100) : v === true)) g[name][id] = v
   if (finite(value.player?.x, 1, WIDTH - 2) && finite(value.player?.y, 1, HEIGHT - 2) && !collides(g, value.player.x, value.player.y)) { g.player.x = value.player.x; g.player.y = value.player.y }
+  g.sol = normalizeSOL(value.sol)
   g.checkpoint = { x: g.player.x, y: g.player.y }
   for (const ore of Object.keys(ORE_COLORS)) if (finite(value.inventory?.[ore], 0, 1000000)) g.inventory[ore] = Math.floor(value.inventory[ore])
   g.broken = finite(value.broken, 0, WIDTH * HEIGHT) ? Math.floor(value.broken) : 0
