@@ -38,6 +38,10 @@ const SPEECH = {
 
 const VALUE = { soil: 1, loose: 1, stone: 2, hard: 3, copper: 5, silver: 12, gold: 25, diamond: 60, sol: 120, casing: 80, sealed: 45, lava: -40, debris: 0 }
 const HITS = { soil: 1, loose: 2, stone: 3, hard: 4, copper: 3, silver: 4, gold: 5, diamond: 7, sol: 8, casing: 1, sealed: 5 }
+const DIRECTIONS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+const NAV_LIMIT = 320
+const PATH_LIMIT = 28
+const RARE_TYPES = new Set(['diamond', 'sol', 'casing', 'sealed'])
 
 const finite = (value, fallback, min, max) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : fallback
 const integer = (value, fallback, min, max) => Number.isInteger(value) && value >= min && value <= max ? value : fallback
@@ -46,6 +50,11 @@ const choice = (list, index) => list[index % list.length]
 function nextRandom(state) {
   state.seed = (Math.imul(state.seed || 1, 1664525) + 1013904223) >>> 0
   return state.seed / 4294967296
+}
+
+function developerDebug() {
+  if (typeof window === 'undefined') return false
+  try { return new URLSearchParams(window.location.search).has('debug') || window.localStorage.getItem('dig-fun-debug') === '1' } catch { return false }
 }
 
 function makeMiner(profile, index) {
@@ -78,6 +87,24 @@ function makeMiner(profile, index) {
     target: null,
     targetType: null,
     mineProgress: 0,
+    renderX: profile.x,
+    renderY: profile.y,
+    move: null,
+    breakTarget: null,
+    escapeTarget: null,
+    routeVersion: -1,
+    routeFailures: 0,
+    noProgress: 0,
+    recovery: 0,
+    lastPathFailure: '',
+    reservationKey: null,
+    avoid: {},
+    initialized: false,
+    carryingRare: false,
+    carryingUntil: 0,
+    recentTiles: [],
+    stateClock: 0,
+    lastState: 'idle',
     think: index * .4,
     blocks: 0,
     deepest: 0,
@@ -117,6 +144,10 @@ export function createAutonomy(now = Date.now()) {
     openingFollowUntil: 4.5,
     auto: { enabled: true, strategy: 'follow-sparkles', target: null, suggestion: null, status: 'Inspecting the surrounding blocks.', decision: 'Inspecting the surrounding blocks.', distance: 0, confidence: 73 },
     puzzle: null,
+    navVersion: 0,
+    lastWorldBroken: 0,
+    reservations: [],
+    debug: developerDebug(),
     records: {},
     offline: null,
     community: { blocks: 0, depth: 0, buys: 0, verifiedBuys: 0, simulatedBuys: 0, ore: { copper: 0, silver: 0, gold: 0, diamond: 0, sol: 0 }, artifacts: 0, puzzles: 0, explosions: 0, cooperation: 0 },
@@ -141,6 +172,8 @@ export function restoreAutonomy(value, now = Date.now()) {
   fresh.crewIntroduced = value.crewIntroduced !== false
   fresh.followId = typeof value.followId === 'string' ? value.followId.slice(0, 100) : null
   fresh.openingFollowUntil = 0
+  fresh.navVersion = integer(value.navVersion, 0, 0, 10_000_000)
+  fresh.lastWorldBroken = integer(value.lastWorldBroken, 0, 0, 10_000_000)
   if (value.auto && typeof value.auto === 'object') {
     fresh.auto.strategy = Object.hasOwn(AUTO_STRATEGIES, value.auto.strategy) ? value.auto.strategy : fresh.auto.strategy
     fresh.auto.enabled = true
@@ -181,6 +214,15 @@ export function restoreAutonomy(value, now = Date.now()) {
       ...miner,
       x: finite(saved.x, miner.x, 1, WIDTH - 2),
       y: finite(saved.y, miner.y, 2, HEIGHT - 2),
+      renderX: finite(saved.x, miner.x, 1, WIDTH - 2),
+      renderY: finite(saved.y, miner.y, 2, HEIGHT - 2),
+      move: null,
+      breakTarget: null,
+      escapeTarget: null,
+      route: null,
+      routeVersion: -1,
+      reservationKey: null,
+      initialized: false,
       facing: saved.facing < 0 ? -1 : 1,
       state: typeof saved.state === 'string' ? saved.state.slice(0, 16) : miner.state,
       speech: typeof saved.speech === 'string' ? saved.speech.slice(0, 80) : miner.speech,
@@ -223,6 +265,15 @@ export function restoreAutonomy(value, now = Date.now()) {
     }
     const miner = makeMiner(profile, fresh.miners.length)
     Object.assign(miner, saved, { kind: 'buyer', index: fresh.miners.length, appearance: profile.appearance || miner.appearance })
+    miner.renderX = miner.x
+    miner.renderY = miner.y
+    miner.move = null
+    miner.breakTarget = null
+    miner.escapeTarget = null
+    miner.route = null
+    miner.routeVersion = -1
+    miner.reservationKey = null
+    miner.initialized = false
     fresh.miners.push(miner)
   }
   return fresh
@@ -243,6 +294,8 @@ export function serializeAutonomy(state) {
     mute: state.mute,
     crewIntroduced: state.crewIntroduced,
     followId: state.followId,
+    navVersion: state.navVersion,
+    lastWorldBroken: state.lastWorldBroken,
     auto: { enabled: true, strategy: state.auto.strategy, status: state.auto.status, decision: state.auto.decision, confidence: state.auto.confidence },
     community: state.community,
     activity: { ...state.activity, source: state.activity.source, join: null },
@@ -398,10 +451,20 @@ function speak(miner, message, state, duration = 4) {
   miner.speechUntil = state.time + duration
 }
 
-function clearTarget(miner) {
+function releaseReservation(state, miner) {
+  if (!state?.reservations) return
+  state.reservations = state.reservations.filter(item => item.minerId !== miner.id)
+  miner.reservationKey = null
+}
+
+function clearTarget(miner, state = null) {
+  releaseReservation(state, miner)
   miner.target = null
   miner.targetType = null
   miner.route = null
+  miner.routeVersion = -1
+  miner.breakTarget = null
+  miner.move = null
   miner.mineProgress = 0
 }
 
@@ -415,6 +478,245 @@ function clueDetected(g, x, y, p) {
   if (distance > 4.5) return false
   const n = hash(x, y)
   return g.scanner > 0 || (g.time + n / 500) % 9 < .2 || n % 13 === 0
+}
+
+function inside(x, y) {
+  return x > 0 && y > 0 && x < WIDTH - 1 && y < HEIGHT - 1
+}
+
+function isLava(g, x, y) {
+  return tile(g, x, y) === 'lava'
+}
+
+function openTile(g, x, y) {
+  const type = tile(g, x, y)
+  return inside(x, y) && (type === 'air' || type === 'ladder')
+}
+
+function safeStanding(g, x, y) {
+  if (!openTile(g, x, y) || isLava(g, x, y)) return false
+  for (let drop = 1; drop <= 4; drop++) {
+    const below = tile(g, x, y + drop)
+    if (below === 'lava') return false
+    if (solid(below) || below === 'ladder') return true
+  }
+  return false
+}
+
+function mineable(type, state, g) {
+  if (!Object.hasOwn(HITS, type) || ['bedrock', 'debris', 'lava'].includes(type)) return false
+  if (type === 'sealed' && !g.artifacts.some(artifact => artifact.solved)) return false
+  return Boolean(state)
+}
+
+function navCost(g, x, y, state, miner) {
+  if (!inside(x, y) || isLava(g, x, y)) return Infinity
+  const type = tile(g, x, y)
+  if (type === 'bedrock' || type === 'debris') return Infinity
+  if (type === 'casing' || type === 'sealed') return Infinity
+  if (openTile(g, x, y)) {
+    const crowd = state && miner ? state.miners.some(other => other.id !== miner.id && Math.floor(other.x) === x && Math.floor(other.y) === y) : false
+    return (type === 'ladder' ? .8 : 1) + (crowd ? 5 : 0)
+  }
+  if (!mineable(type, state, g)) return Infinity
+  const danger = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([a, b]) => isLava(g, a, b)) ? 7 : 0
+  const power = Math.max(1, miner?.power || 1)
+  return 1.5 + (HITS[type] || 3) * .7 / power + danger
+}
+
+function reservationAt(state, x, y, exceptId = '') {
+  return (state?.reservations || []).find(item => item.x === x && item.y === y && item.minerId !== exceptId && item.expires > state.time)
+}
+
+function cleanupReservations(state) {
+  state.reservations ||= []
+  const miners = new Map(state.miners.map(miner => [miner.id, miner]))
+  state.reservations = state.reservations.filter(item => {
+    const miner = miners.get(item.minerId)
+    const target = miner?.target
+    const valid = miner && target && target.x === item.x && target.y === item.y && item.expires > state.time
+    if (!valid && miner?.reservationKey === item.key) miner.reservationKey = null
+    return valid
+  })
+}
+
+function reserveTarget(state, miner, target, type) {
+  cleanupReservations(state)
+  const conflict = reservationAt(state, target.x, target.y, miner.id)
+  if (conflict && type !== 'hard') return false
+  releaseReservation(state, miner)
+  const key = keyOf(target.x, target.y)
+  state.reservations.push({ minerId: miner.id, x: target.x, y: target.y, key, type, reservedAt: state.time, expires: state.time + (type === 'hard' ? 12 : 8), action: 'target' })
+  miner.reservationKey = key
+  if (conflict) state.community.cooperation++
+  return true
+}
+
+function markNavigationChanged(state, x, y) {
+  state.navVersion = (state.navVersion || 0) + 1
+  state.navDirty ||= []
+  state.navDirty.push({ x, y, version: state.navVersion })
+  if (state.navDirty.length > 48) state.navDirty.splice(0, state.navDirty.length - 48)
+}
+
+function reconstructPath(came, current) {
+  const path = [{ x: current.x, y: current.y }]
+  let cursor = keyOf(current.x, current.y)
+  while (came.has(cursor)) {
+    const previous = came.get(cursor)
+    path.push(previous)
+    cursor = keyOf(previous.x, previous.y)
+  }
+  return path.reverse()
+}
+
+function aStar(g, start, goal, state = null, miner = null, allowBreakableGoal = false) {
+  const goalType = tile(g, goal.x, goal.y)
+  if (!inside(start.x, start.y) || (!safeStanding(g, goal.x, goal.y) && !(allowBreakableGoal && mineable(goalType, state, g)))) return null
+  const startKey = keyOf(start.x, start.y), goalKey = keyOf(goal.x, goal.y)
+  const open = [{ x: start.x, y: start.y, g: 0, f: Math.abs(start.x - goal.x) + Math.abs(start.y - goal.y) }]
+  const came = new Map(), scores = new Map([[startKey, 0]]), closed = new Set()
+  let inspected = 0
+  while (open.length && inspected++ < NAV_LIMIT) {
+    open.sort((a, b) => a.f - b.f || a.g - b.g)
+    const current = open.shift()
+    const currentKey = keyOf(current.x, current.y)
+    if (closed.has(currentKey)) continue
+    if (currentKey === goalKey) {
+      const path = reconstructPath(came, current)
+      return path.length <= PATH_LIMIT ? path : null
+    }
+    closed.add(currentKey)
+    for (const [dx, dy] of DIRECTIONS) {
+      const x = current.x + dx, y = current.y + dy, id = keyOf(x, y)
+      if (!inside(x, y) || closed.has(id)) continue
+      const cost = id === goalKey && allowBreakableGoal && mineable(tile(g, x, y), state, g) ? 1.5 + (HITS[tile(g, x, y)] || 3) * .7 / Math.max(1, miner?.power || 1) : navCost(g, x, y, state, miner)
+      if (!Number.isFinite(cost)) continue
+      if (miner?.avoid?.[id] > (state?.time || 0)) continue
+      const nextScore = current.g + cost
+      if (nextScore >= (scores.get(id) ?? Infinity)) continue
+      scores.set(id, nextScore)
+      came.set(id, { x: current.x, y: current.y })
+      open.push({ x, y, g: nextScore, f: nextScore + Math.abs(x - goal.x) + Math.abs(y - goal.y) })
+    }
+  }
+  return null
+}
+
+function routeCost(g, path, state, miner) {
+  return path.slice(1).reduce((sum, cell) => sum + navCost(g, cell.x, cell.y, state, miner), 0)
+}
+
+export function routeToBlock(g, start, target, state = null, miner = null) {
+  if (!inside(target.x, target.y) || isLava(g, target.x, target.y)) return null
+  const standing = DIRECTIONS.map(([dx, dy]) => ({ x: target.x + dx, y: target.y + dy })).filter(cell => safeStanding(g, cell.x, cell.y))
+  let best = null
+  for (const goal of standing) {
+    const path = aStar(g, { x: Math.floor(start.x), y: Math.floor(start.y) }, goal, state, miner)
+    if (!path) continue
+    const cost = routeCost(g, path, state, miner)
+    if (!best || cost < best.cost) best = { path, cost }
+  }
+  if (!best) {
+    const staging = DIRECTIONS.map(([dx, dy]) => ({ x: target.x + dx, y: target.y + dy })).filter(cell => mineable(tile(g, cell.x, cell.y), state, g))
+    for (const goal of staging) {
+      const path = aStar(g, { x: Math.floor(start.x), y: Math.floor(start.y) }, goal, state, miner, true)
+      if (!path) continue
+      const cost = routeCost(g, path, state, miner)
+      if (!best || cost < best.cost) best = { path, cost }
+    }
+  }
+  return best?.path || null
+}
+
+function nearestSafeCell(g, origin, radius = 8, state = null, miner = null) {
+  for (let distance = 0; distance <= radius; distance++) {
+    for (let y = Math.max(1, origin.y - distance); y <= Math.min(HEIGHT - 2, origin.y + distance); y++) for (let x = Math.max(1, origin.x - distance); x <= Math.min(WIDTH - 2, origin.x + distance); x++) {
+      if (Math.abs(x - origin.x) + Math.abs(y - origin.y) !== distance || !safeStanding(g, x, y)) continue
+      if (state && miner && state.miners.some(other => other.id !== miner.id && Math.floor(other.x) === x && Math.floor(other.y) === y)) continue
+      return { x, y }
+    }
+  }
+  return null
+}
+
+function occupiedByOther(state, miner, x, y) {
+  return state.miners.find(other => {
+    if (other.id === miner.id) return false
+    const at = other.move ? { x: other.move.toX, y: other.move.toY } : { x: other.x, y: other.y }
+    return Math.floor(at.x) === x && Math.floor(at.y) === y
+  })
+}
+
+function minerPriority(miner) {
+  if (miner.state === 'escaping' || miner.status?.includes('lava')) return 100
+  if (miner.carryingRare || ['diamond', 'sol'].includes(miner.lastDiscovery?.type)) return 80
+  return RARE_TYPES.has(miner.targetType) ? 60 : 20
+}
+
+function yieldMiner(state, g, miner) {
+  if (miner.escapeTarget) return true
+  const current = { x: Math.floor(miner.x), y: Math.floor(miner.y) }
+  const candidates = DIRECTIONS.map(([dx, dy]) => ({ x: current.x + dx, y: current.y + dy })).filter(cell => safeStanding(g, cell.x, cell.y) && !occupiedByOther(state, miner, cell.x, cell.y))
+  const next = candidates[0]
+  if (!next) return false
+  miner.escapeTarget = next
+  miner.move = null
+  miner.route = null
+  miner.routeVersion = -1
+  miner.state = 'escaping'
+  miner.status = 'Excuse me… making room'
+  speak(miner, 'Excuse me…', state, 1.5)
+  return true
+}
+
+function recoverMiner(state, g, miner, reason = 'blocked route') {
+  miner.recovery = Math.min(5, (miner.recovery || 0) + 1)
+  miner.routeFailures = (miner.routeFailures || 0) + 1
+  miner.lastPathFailure = reason
+  miner.move = null
+  miner.renderX = Math.round(miner.x * 16) / 16
+  miner.renderY = Math.round(miner.y * 16) / 16
+  miner.noProgress = 0
+  if (miner.recovery === 1) {
+    const snapped = safeStanding(g, Math.floor(miner.x), Math.floor(miner.y)) ? { x: Math.floor(miner.x), y: Math.floor(miner.y) } : nearestSafeCell(g, { x: Math.floor(miner.x), y: Math.floor(miner.y) }, 4, state, miner)
+    if (snapped) { miner.x = snapped.x; miner.y = snapped.y; miner.renderX = snapped.x; miner.renderY = snapped.y }
+    miner.route = null
+    miner.routeVersion = -1
+    miner.status = 'Rechecking route'
+    return
+  }
+  if (miner.recovery === 2 && miner.target) {
+    const route = routeToBlock(g, miner, miner.target, state, miner)
+    if (route) {
+      miner.route = route
+      miner.routeVersion = state.navVersion
+      miner.status = 'Rerouting safely'
+      return
+    }
+  }
+  if (miner.recovery === 3) {
+    if (miner.target) miner.avoid[keyOf(miner.target.x, miner.target.y)] = state.time + 4
+    clearTarget(miner, state)
+    miner.status = 'Choosing another route'
+    miner.think = 0
+    speak(miner, 'Wall says no. Finding another route.', state, 2.5)
+    return
+  }
+  if (miner.recovery === 4 && yieldMiner(state, g, miner)) return
+  const safe = nearestSafeCell(g, { x: Math.floor(miner.x), y: Math.floor(miner.y) }, 8, state, miner)
+  clearTarget(miner, state)
+  if (safe) {
+    miner.x = safe.x; miner.y = safe.y; miner.renderX = safe.x; miner.renderY = safe.y
+    g.particles ||= []
+    g.particles.push({ x: safe.x + .5, y: safe.y + .5, vx: 0, vy: -1.2, life: .32, color: '#ad9a78' })
+  }
+  miner.escapeTarget = null
+  miner.recovery = 0
+  miner.routeFailures = 0
+  miner.state = 'idle'
+  miner.status = 'Searching for a deeper route'
+  miner.think = 0
 }
 
 function candidateScore(type, x, y, miner, state, g, p) {
@@ -436,23 +738,29 @@ function candidateScore(type, x, y, miner, state, g, p) {
 function chooseTarget(state, g, miner) {
   revealMinerArea(g, miner)
   const origin = { x: Math.floor(miner.x), y: Math.floor(miner.y) }
-  let best = null
+  const candidates = []
   for (let y = Math.max(2, origin.y - 3); y <= Math.min(HEIGHT - 2, origin.y + 4); y++) for (let x = Math.max(1, origin.x - 6); x <= Math.min(WIDTH - 2, origin.x + 6); x++) {
     const type = tile(g, x, y)
-    if (!solid(type) || ['bedrock', 'debris'].includes(type) || !g.seen[keyOf(x, y)]) continue
-    if (type === 'sealed' && !g.artifacts.some(artifact => artifact.solved)) continue
+    if (!solid(type) || !mineable(type, state, g) || !g.seen[keyOf(x, y)] || reservationAt(state, x, y, miner.id) && type !== 'hard') continue
     const distance = Math.abs(x - origin.x) + Math.abs(y - origin.y)
     if (!distance || distance > 8) continue
-    const route = routeToBlock(g, origin, { x, y })
+    const route = routeToBlock(g, origin, { x, y }, state, miner)
     if (!route) continue
-    const score = candidateScore(type, x, y, miner, state, g, miner)
-    if (!best || score > best.score) best = { x, y, type, score, route }
+    const travel = routeCost(g, route, state, miner)
+    const crowd = state.reservations.filter(item => Math.abs(item.x - x) + Math.abs(item.y - y) <= 2 && item.minerId !== miner.id).length
+    const score = candidateScore(type, x, y, miner, state, g, miner) - travel * 1.8 - (HITS[type] || 3) * .8 - crowd * 12
+    candidates.push({ x, y, type, score, route })
   }
+  candidates.sort((a, b) => b.score - a.score)
+  const best = candidates.find(candidate => reserveTarget(state, miner, candidate, candidate.type))
   if (!best) return null
   miner.target = { x: best.x, y: best.y }
   miner.route = best.route
+  miner.routeVersion = state.navVersion
   miner.targetType = best.type
   miner.mineProgress = 0
+  miner.breakTarget = null
+  miner.noProgress = 0
   miner.goal = best.type === 'casing' || best.type === 'sealed' ? 'Inspecting a sealed chamber.' : best.type === 'sol' ? 'Chasing a SOL crystal.' : 'Investigating ' + best.type + ' signal.'
   miner.status = best.type === 'casing' || best.type === 'sealed' ? 'Entering chamber' : best.type === 'sol' ? 'Following a SOL signal' : best.type === 'diamond' ? 'Following a diamond signal' : 'Walking to target'
   if (best.type === 'gold' || best.type === 'diamond' || best.type === 'sol') speak(miner, choice(SPEECH[miner.role] || SPEECH.COLLECTOR, Math.floor(state.time + miner.index)), state)
@@ -460,8 +768,7 @@ function chooseTarget(state, g, miner) {
 }
 
 function isOpen(g, x, y) {
-  const type = tile(g, Math.floor(x), Math.floor(y))
-  return !solid(type) || type === 'ladder'
+  return openTile(g, Math.floor(x), Math.floor(y))
 }
 
 function revealMinerArea(g, miner) {
@@ -471,7 +778,7 @@ function revealMinerArea(g, miner) {
   for (let i = 0; i < queue.length; i++) {
     const current = queue[i]
     g.seen[keyOf(current.x, current.y)] = true
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dy] of DIRECTIONS) {
       const x = current.x + dx, y = current.y + dy, id = keyOf(x, y)
       if (x < 1 || y < 1 || x >= WIDTH - 1 || y >= HEIGHT - 1 || visited.has(id) || Math.hypot(x - origin.x, y - origin.y) > 6) continue
       visited.add(id)
@@ -482,58 +789,123 @@ function revealMinerArea(g, miner) {
 }
 
 function moveMiner(state, g, miner, dt) {
-  if (!miner.target) return
+  if (!miner.target && !miner.escapeTarget) return
+  if (miner.move) {
+    const boost = state.time < miner.boostUntil ? 1.35 : 1
+    const speed = (miner.baseSpeed || miner.speed) * boost * (state.event?.name === 'Drill Frenzy' ? 1.8 : 1)
+    miner.move.progress = Math.min(1, miner.move.progress + speed * dt)
+    const progress = miner.move.progress
+    miner.renderX = Math.round((miner.move.fromX + (miner.move.toX - miner.move.fromX) * progress) * 16) / 16
+    miner.renderY = Math.round((miner.move.fromY + (miner.move.toY - miner.move.fromY) * progress) * 16) / 16
+    miner.state = miner.move.dy ? 'climbing' : 'walking'
+    miner.status = miner.move.dy > 0 ? 'Searching for a deeper route' : 'Walking to target'
+    miner.noProgress = 0
+    if (progress < 1) return
+    const blocker = occupiedByOther(state, miner, miner.move.toX, miner.move.toY)
+    if (blocker) {
+      if (minerPriority(miner) > minerPriority(blocker)) yieldMiner(state, g, blocker)
+      recoverMiner(state, g, miner, 'another miner blocked the tile')
+      return
+    }
+    miner.x = miner.move.toX; miner.y = miner.move.toY
+    miner.renderX = miner.x; miner.renderY = miner.y
+    miner.move = null
+    miner.noProgress = 0
+    miner.routeFailures = 0
+    miner.recovery = 0
+    miner.stateClock = 0
+    miner.recentTiles = [...(miner.recentTiles || []).slice(-3), keyOf(miner.x, miner.y)]
+    const recent = miner.recentTiles
+    if (recent.length >= 4 && recent.at(-1) === recent.at(-3) && recent.at(-2) === recent.at(-4)) recoverMiner(state, g, miner, 'alternating between two tiles')
+    if (miner.escapeTarget && miner.x === miner.escapeTarget.x && miner.y === miner.escapeTarget.y) {
+      miner.escapeTarget = null
+      miner.state = 'idle'
+      miner.status = 'Choosing another route'
+      miner.think = 0
+    }
+    return
+  }
+  if (miner.escapeTarget) {
+    const goal = miner.escapeTarget
+    if (miner.x === goal.x && miner.y === goal.y) { miner.escapeTarget = null; miner.state = 'idle'; miner.think = 0; return }
+    const route = aStar(g, { x: Math.floor(miner.x), y: Math.floor(miner.y) }, goal, state, miner)
+    const next = route?.[1]
+    if (!next) { recoverMiner(state, g, miner, 'no congestion escape route'); return }
+    startTileMove(state, g, miner, next)
+    return
+  }
+  const valid = validateTarget(state, g, miner)
+  if (!valid) { recoverMiner(state, g, miner, 'target became unreachable'); return }
   const floorX = Math.floor(miner.x), floorY = Math.floor(miner.y)
-  const routeIndex = miner.route?.findIndex(cell => cell.x === floorX && cell.y === floorY) ?? -1
-  const target = routeIndex >= 0 && miner.route[routeIndex + 1] ? miner.route[routeIndex + 1] : miner.target
-  const dx = target.x - miner.x
-  const dy = target.y - miner.y
-  const boost = state.time < miner.boostUntil ? 1.35 : 1
-  const speed = (miner.baseSpeed || miner.speed) * boost * (state.event?.name === 'Drill Frenzy' ? 1.8 : 1)
-  if (Math.abs(dx) > 1.05) {
-    const direction = Math.sign(dx)
-    const next = miner.x + direction * speed * dt
-    if (isOpen(g, next + (direction > 0 ? .45 : -.1), miner.y + .45)) {
-      miner.x = next
-      miner.facing = direction
-      miner.state = 'walking'
-      miner.status = 'Walking to target'
-      return
-    }
-    clearTarget(miner)
-    speak(miner, miner.role === 'CAREFUL MINER' ? 'Route blocked. Rerouting safely.' : 'Wall says no. Finding another route.', state)
-    return
-  }
-  if (Math.abs(dy) > 1.05) {
-    const direction = Math.sign(dy)
-    const next = miner.y + direction * speed * dt
-    if (isOpen(g, miner.x + .35, next + .45)) {
-      miner.y = next
-      miner.state = 'climbing'
-      miner.status = 'Searching for a deeper route'
-      return
-    }
-    clearTarget(miner)
-    return
-  }
-  const type = tile(g, miner.target.x, miner.target.y)
-  miner.state = 'mining'
-  miner.status = type === 'casing' || type === 'sealed' ? 'Entering chamber' : type === 'lava' ? 'Avoiding lava' : 'Mining stone'
+  const routeIndex = miner.route.findIndex(cell => cell.x === floorX && cell.y === floorY)
+  if (routeIndex < 0 || !miner.route[routeIndex + 1]) { recoverMiner(state, g, miner, 'path ended before target'); return }
+  const target = miner.route[routeIndex + 1]
+  startTileMove(state, g, miner, target)
 }
 
-function discovery(state, g, miner, type) {
+function validateTarget(state, g, miner) {
+  if (!miner.target) return null
+  const type = tile(g, miner.target.x, miner.target.y)
+  if (!mineable(type, state, g) || reservationAt(state, miner.target.x, miner.target.y, miner.id)) {
+    clearTarget(miner, state)
+    return null
+  }
+  if (miner.route && miner.routeVersion === state.navVersion) return { type, route: miner.route }
+  const route = routeToBlock(g, miner, miner.target, state, miner)
+  if (!route) return null
+  miner.route = route
+  miner.routeVersion = state.navVersion
+  miner.targetType = type
+  return { type, route }
+}
+
+function startTileMove(state, g, miner, next) {
+  const type = tile(g, next.x, next.y)
+  if (isLava(g, next.x, next.y) || !inside(next.x, next.y)) { recoverMiner(state, g, miner, 'hazard in path'); return false }
+  if (!openTile(g, next.x, next.y)) {
+    if (mineable(type, state, g)) {
+      miner.breakTarget = { x: next.x, y: next.y }
+      miner.state = 'mining'
+      miner.status = type === 'gold' || type === 'diamond' || type === 'sol' ? 'Investigating sparkle' : 'Mining stone'
+      return true
+    }
+    recoverMiner(state, g, miner, 'indestructible path tile')
+    return false
+  }
+  if (!safeStanding(g, next.x, next.y)) { recoverMiner(state, g, miner, 'unsafe landing'); return false }
+  const blocker = occupiedByOther(state, miner, next.x, next.y)
+  if (blocker) {
+    if (minerPriority(miner) > minerPriority(blocker) && yieldMiner(state, g, blocker)) return false
+    miner.status = 'Waiting for an open tile'
+    miner.noProgress += .1
+    if (miner.noProgress > .6) recoverMiner(state, g, miner, 'tunnel congestion')
+    return false
+  }
+  const fromX = miner.x, fromY = miner.y
+  miner.move = { fromX, fromY, toX: next.x, toY: next.y, dx: next.x - Math.floor(fromX), dy: next.y - Math.floor(fromY), progress: 0 }
+  miner.facing = Math.sign(next.x - fromX) || miner.facing
+  miner.state = next.y !== Math.floor(fromY) ? 'climbing' : 'walking'
+  miner.status = next.y > Math.floor(fromY) ? 'Searching for a deeper route' : 'Walking to target'
+  miner.noProgress = 0
+  miner.stateClock = 0
+  return true
+}
+
+function discovery(state, g, miner, type, point = miner.target) {
+  if (!point) return
   const label = type === 'sol' ? 'SOL crystal' : type + ' cache'
   miner.haul[type] = (miner.haul[type] || 0) + (type === 'gold' ? 2 : 1)
   miner.blocks++
   miner.streak++
   miner.lastDiscovery = { type, at: state.time }
   if (RARE_ORDER.includes(type) && RARE_ORDER.indexOf(type) >= RARE_ORDER.indexOf(miner.rarest)) miner.rarest = type
-  g.removed[keyOf(miner.target.x, miner.target.y)] = true
+  g.removed[keyOf(point.x, point.y)] = true
   g.broken = (g.broken || 0) + 1
+  markNavigationChanged(state, point.x, point.y)
   state.community.blocks++
   state.community.depth = Math.max(state.community.depth, Math.max(0, (miner.y - 8) * 10))
   if (state.community.ore[type] != null) state.community.ore[type]++
-  g.communityImpact = { x: miner.target.x, y: miner.target.y, until: g.time + .18, type }
+  g.communityImpact = { x: point.x, y: point.y, until: g.time + .18, type }
   if (type === 'diamond' || type === 'sol') announce(state, miner.name + ' found a ' + label + ' at ' + Math.round(miner.y * 10) + 'm.', { title: 'RAREST DISCOVERY', subtitle: (type === 'sol' ? 'Prismatic SOL crystal' : 'Diamond cache') + ' · found by ' + miner.name, color: type === 'sol' ? '#c88cff' : '#73ecf0', minerId: miner.id })
   else if (type === 'gold') announce(state, miner.name + ' cracked ' + miner.haul.gold + ' gold at ' + Math.round(miner.y * 10) + 'm.')
   else if (state.tickerClock > 3) announce(state, miner.name + ' collected ' + miner.haul[type] + ' ' + type + '.')
@@ -572,27 +944,33 @@ export function startPuzzle(state, g, minerId = 'player', artifactId = null) {
 }
 
 function workMiner(state, g, miner, dt) {
-  const type = miner.targetType || (miner.target && tile(g, miner.target.x, miner.target.y))
-  if (!miner.target || !type || !solid(type)) {
-    clearTarget(miner)
+  const point = miner.breakTarget || miner.target
+  const type = point && (miner.breakTarget ? tile(g, point.x, point.y) : miner.targetType || tile(g, point.x, point.y))
+  if (!point || !type || !solid(type) || !mineable(type, state, g)) {
+    if (miner.breakTarget) miner.breakTarget = null
+    else clearTarget(miner, state)
     return
   }
   miner.mineProgress += dt * (1 + (miner.baseSpeed || miner.speed) * .45 + (miner.power || 1) * .12)
+  miner.noProgress = 0
+  miner.stateClock = 0
   miner.state = 'mining'
   if (type === 'casing' || type === 'sealed') {
+    if (point !== miner.target) { recoverMiner(state, g, miner, 'locked door in path'); return }
     if (miner.mineProgress > 1.6 && !state.puzzle) {
-      const id = keyOf(miner.target.x, miner.target.y)
+      const id = keyOf(point.x, point.y)
       g.removed[id] = true
+      markNavigationChanged(state, point.x, point.y)
       if (!g.artifacts.some(artifact => artifact.id === id)) g.artifacts.push({ id, outcome: 'puzzle', solved: false, turns: 0, dials: [0, 0, 0] })
       startPuzzle(state, g, miner.id, id)
-      clearTarget(miner)
+      clearTarget(miner, state)
     }
     return
   }
   if (type === 'lava') {
     miner.lavaIncidents++
     speak(miner, 'Running from lava.', state, 4)
-    clearTarget(miner)
+    clearTarget(miner, state)
     return
   }
   if (miner.mineProgress >= (HITS[type] || 3) * .45) {
@@ -604,20 +982,31 @@ function workMiner(state, g, miner, dt) {
       state.community.blocks += blast
       state.community.explosions += blast
       g.broken = (g.broken || 0) + blast
-      g.communityImpact = { x: miner.target.x, y: miner.target.y, until: g.time + .45, type: 'explosion' }
+      g.communityImpact = { x: point.x, y: point.y, until: g.time + .45, type: 'explosion' }
       g.shake = Math.max(g.shake || 0, .45)
       announce(state, miner.name + ' detonated ' + blast + ' blocks. The tunnel is “better” now.', { title: 'BIGGEST EXPLOSION', subtitle: blast + ' blocks destroyed by ' + miner.name, color: '#ffad5c', minerId: miner.id })
       speak(miner, 'Absolutely safe explosion incoming.', state, 5)
-      g.removed[keyOf(miner.target.x, miner.target.y)] = true
-    } else discovery(state, g, miner, type)
-    clearTarget(miner)
+      g.removed[keyOf(point.x, point.y)] = true
+      markNavigationChanged(state, point.x, point.y)
+    } else discovery(state, g, miner, type, point)
+    if (miner.breakTarget && (!miner.target || keyOf(point.x, point.y) !== keyOf(miner.target.x, miner.target.y))) {
+      miner.breakTarget = null
+      miner.mineProgress = 0
+      miner.route = null
+      miner.routeVersion = -1
+      miner.status = 'Recalculating route'
+      return
+    }
+    miner.carryingRare = ['diamond', 'sol'].includes(type)
+    miner.carryingUntil = state.time + (miner.carryingRare ? 4 : 0)
+    clearTarget(miner, state)
   }
 }
 
 function updatePuzzle(state, g, dt) {
   if (!state.puzzle) return
   if (state.puzzle.done) {
-    if (state.time - (state.puzzle.doneAt || state.time) > 2.8) state.puzzle = null
+    if (state.time - (state.puzzle.doneAt || state.time) > 30) state.puzzle = null
     return
   }
   const miner = state.miners.find(item => item.id === state.puzzle.minerId)
@@ -711,6 +1100,32 @@ function advanceAnnouncements(state) {
   }
 }
 
+function normalizeMinerPosition(state, g, miner) {
+  if (miner.initialized) return
+  const origin = { x: Math.floor(miner.x), y: Math.floor(miner.y) }
+  if (!safeStanding(g, origin.x, origin.y)) {
+    const safe = nearestSafeCell(g, origin, 8, state, miner)
+    if (safe) {
+      miner.x = safe.x; miner.y = safe.y; miner.renderX = safe.x; miner.renderY = safe.y
+      g.particles ||= []
+      g.particles.push({ x: safe.x + .5, y: safe.y + .5, vx: 0, vy: -1, life: .28, color: '#ad9a78' })
+      miner.status = 'Finding an open tunnel'
+    }
+  }
+  miner.initialized = true
+}
+
+function updateMinerProgress(state, g, miner, dt) {
+  if (miner.target && ['walking', 'climbing', 'escaping'].includes(miner.state) && !miner.move) {
+    miner.noProgress = (miner.noProgress || 0) + dt
+    if (miner.noProgress > 1.5) recoverMiner(state, g, miner, 'no movement for 1.5 seconds')
+  }
+  if (miner.target && miner.state === 'mining' && miner.mineProgress > 0 && miner.mineProgress < 0.1) {
+    miner.noProgress = (miner.noProgress || 0) + dt
+    if (miner.noProgress > 6) recoverMiner(state, g, miner, 'mining made no progress')
+  }
+}
+
 export function tickCrew(state, g, dt) {
   if (!state || !g || !Number.isFinite(dt) || dt <= 0) return state
   state.time += Math.min(dt, .1)
@@ -727,11 +1142,22 @@ export function tickCrew(state, g, dt) {
   tickActivity(state, g)
   updatePuzzle(state, g, dt)
   advanceAnnouncements(state)
+  cleanupReservations(state)
+  if (state.lastWorldBroken !== (g.broken || 0)) {
+    state.lastWorldBroken = g.broken || 0
+    markNavigationChanged(state, Math.floor(g.player.x), Math.floor(g.player.y))
+  }
   for (const miner of state.miners) {
     miner.lastActive = state.time
+    if (miner.carryingRare && state.time >= miner.carryingUntil) miner.carryingRare = false
+    if (miner.lastState !== miner.state) { miner.lastState = miner.state; miner.stateClock = 0 }
+    else miner.stateClock = (miner.stateClock || 0) + dt
+    if (miner.stateClock > 12 && ['walking', 'climbing', 'mining'].includes(miner.state) && state.puzzle?.minerId !== miner.id) recoverMiner(state, g, miner, 'state lasted too long')
     if (miner.spawnUntil > state.time) {
       const progress = 1 - (miner.spawnUntil - state.time) / 1.5
       miner.y = 5.15 + (miner.spawnY - 5.15) * Math.max(0, Math.min(1, progress))
+      miner.renderY = Math.round(miner.y * 16) / 16
+      miner.move = null
       miner.state = 'spawning'
       miner.status = 'Entering the mine'
       continue
@@ -746,9 +1172,15 @@ export function tickCrew(state, g, dt) {
       miner.status = 'Scanning for ore'
       miner.think = 0
     }
+    normalizeMinerPosition(state, g, miner)
     if (state.puzzle?.minerId === miner.id && !state.puzzle.done) {
+      miner.move = null
       miner.state = 'inspecting'
       continue
+    }
+    if (!miner.target && !miner.escapeTarget && ['mining', 'walking', 'climbing'].includes(miner.state)) {
+      miner.state = 'idle'
+      miner.status = 'Searching for ore'
     }
     const distance = Math.hypot(miner.x - g.player.x, miner.y - g.player.y)
     if (distance > 42) {
@@ -764,11 +1196,20 @@ export function tickCrew(state, g, dt) {
       speak(miner, choice(SPEECH[miner.role] || SPEECH.COLLECTOR, Math.floor(state.time + miner.index)), state)
       miner.think = 4 + nextRandom(state) * 4
     }
-    if (!miner.target && miner.think <= 0) chooseTarget(state, g, miner)
-    if (miner.target) {
-      if (Math.abs(miner.target.x - miner.x) <= 1.05 && Math.abs(miner.target.y - miner.y) <= 1.05) workMiner(state, g, miner, simDt)
+    if (!miner.target && !miner.escapeTarget && miner.think <= 0) {
+      if (!chooseTarget(state, g, miner)) {
+        miner.status = 'Searching for a deeper route'
+        miner.think = .45 + nextRandom(state) * .45
+      }
+    }
+    if (miner.escapeTarget) moveMiner(state, g, miner, simDt)
+    else if (miner.target) {
+      const targetDistance = Math.abs(miner.target.x - Math.floor(miner.x)) + Math.abs(miner.target.y - Math.floor(miner.y))
+      if (targetDistance <= 1) workMiner(state, g, miner, simDt)
+      else if (miner.breakTarget) workMiner(state, g, miner, simDt)
       else moveMiner(state, g, miner, simDt)
     }
+    updateMinerProgress(state, g, miner, simDt)
   }
   if (!state.noticeCurrent && state.tickerClock > 6) {
     const active = state.miners[Math.floor(nextRandom(state) * state.miners.length)]
@@ -810,23 +1251,6 @@ export function computeRecords(state, g) {
     emptyChests: max('emptyChests'),
   }
   return state.records
-}
-
-function routeToBlock(g, start, target) {
-  const queue = [{ x: start.x, y: start.y, path: [] }]
-  const visited = new Set([keyOf(start.x, start.y)])
-  while (queue.length) {
-    const current = queue.shift()
-    if (Math.abs(current.x - target.x) + Math.abs(current.y - target.y) === 1) return [...current.path, { x: current.x, y: current.y }]
-    if (current.path.length >= 12) continue
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const x = current.x + dx, y = current.y + dy, id = keyOf(x, y)
-      if (x < 1 || y < 1 || x >= WIDTH - 1 || y >= HEIGHT - 1 || visited.has(id) || solid(tile(g, x, y))) continue
-      visited.add(id)
-      queue.push({ x, y, path: [...current.path, { x: current.x, y: current.y }] })
-    }
-  }
-  return null
 }
 
 function targetLabel(type, clue) {

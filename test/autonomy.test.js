@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, spawnBuyer, startPuzzle, tickCrew } from '../src/utils/autonomy.js'
+import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, routeToBlock, serializeAutonomy, spawnBuyer, startPuzzle, tickCrew } from '../src/utils/autonomy.js'
 import { activityConfig, minerTraits, pollLiveBuys, shortenAddress } from '../src/utils/activity.js'
 import { createGame, DEFAULT_SETTINGS, reveal, step } from '../src/utils/world.js'
 
@@ -113,6 +113,42 @@ test('mine announcements queue and major banners expire locally', () => {
   for (let i = 0; i < 40; i++) tickCrew(state, g, 1 / 60)
   assert.equal(state.major, null)
   assert.notEqual(state.ticker, '')
+})
+
+test('crew routes are bounded, tile-aligned, and reserve different ordinary targets', () => {
+  const g = createGame()
+  const state = createAutonomy(0)
+  reveal(g)
+  const route = routeToBlock(g, { x: 9, y: 7 }, { x: 9, y: 8 }, state, state.miners[0])
+  assert.ok(route)
+  assert.ok(route.length <= 28)
+  for (const [index, cell] of route.entries()) {
+    assert.equal(Number.isInteger(cell.x), true)
+    assert.equal(Number.isInteger(cell.y), true)
+    if (index) assert.equal(Math.abs(cell.x - route[index - 1].x) + Math.abs(cell.y - route[index - 1].y), 1)
+  }
+  for (let i = 0; i < 240; i++) tickCrew(state, g, 1 / 60)
+  assert.equal(new Set(state.reservations.map(item => `${item.x},${item.y}`)).size, state.reservations.length)
+  assert.ok(state.miners.every(miner => Number.isInteger(Math.round((miner.renderX ?? miner.x) * 16))))
+  assert.ok(state.reservations.every(item => {
+    const miner = state.miners.find(candidate => candidate.id === item.minerId)
+    return miner?.target?.x === item.x && miner?.target?.y === item.y
+  }))
+})
+
+test('invalid targets are released and stuck recovery keeps miners in safe bounds', () => {
+  const g = createGame()
+  const state = createAutonomy(0)
+  reveal(g)
+  const miner = state.miners[0]
+  miner.initialized = true
+  miner.target = { x: 0, y: 0 }
+  miner.targetType = 'bedrock'
+  state.reservations.push({ minerId: miner.id, x: 0, y: 0, key: '0,0', reservedAt: 0, expires: 20, action: 'target' })
+  tickCrew(state, g, 1 / 60)
+  assert.equal(state.reservations.some(item => item.minerId === miner.id && item.x === 0), false)
+  assert.ok(miner.x > 0 && miner.x < 79 && miner.y > 0 && miner.y < 179)
+  assert.notEqual(miner.state, 'walking')
 })
 
 test('live read-only polling only emits verified public balance deltas', async () => {

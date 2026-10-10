@@ -22,7 +22,7 @@ const MinerNameplates = forwardRef(function MinerNameplates({ miners = [], crewV
       const originY = Math.round(canvasRect.top - containerRect.top)
       const entries = [
         { id: 'player', name: 'YOU', color: '#ffd36a', status: autonomy?.status || 'Searching for ore', x: game.player.x + .325, y: game.player.y + .9 },
-        ...miners.map(miner => ({ id: miner.id, name: miner.name, color: miner.color, status: miner.status || miner.speech || miner.goal, x: miner.x + .325, y: miner.y + .9 })),
+        ...miners.map(miner => ({ id: miner.id, name: miner.name, color: miner.color, status: miner.status || miner.speech || miner.goal, x: (miner.renderX ?? miner.x) + .325, y: (miner.renderY ?? miner.y) + .9 })),
       ]
       const nodes = new Map([...root.children].map(node => [node.dataset.minerId, node]))
       const visibleIds = new Set([currentFollowId, currentFocusId].filter(Boolean))
@@ -54,7 +54,7 @@ const MinerNameplates = forwardRef(function MinerNameplates({ miners = [], crewV
         group.hidden = nearby.length < 2 || nearby.some(miner => visibleIds.has(miner.id))
         if (!group.hidden) {
           const first = nearby[0]
-          const position = screenPosition(first.x + .325, first.y + .9, camera, canvas, scale)
+          const position = screenPosition((first.renderX ?? first.x) + .325, (first.renderY ?? first.y) + .9, camera, canvas, scale)
           group.style.left = `${Math.round(originX + position.x - 40)}px`
           group.style.top = `${Math.round(originY + position.y - 28)}px`
           group.textContent = `${nearby.length} MINERS HERE`

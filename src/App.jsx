@@ -347,7 +347,7 @@ export default function App() {
       x: ((worldX * TILE - (camera.current.drawX ?? camera.current.x)) * zoom + element.width / 2 * (1 - zoom)),
       y: ((worldY * TILE - (camera.current.drawY ?? camera.current.y)) * zoom + element.height / 2 * (1 - zoom)),
     })
-    const entries = [{ id: 'player', x: game.current.player.x + .325, y: game.current.player.y + .9 }, ...autonomyRef.current.miners.map(miner => ({ id: miner.id, x: miner.x + .325, y: miner.y + .9 }))]
+    const entries = [{ id: 'player', x: game.current.player.x + .325, y: game.current.player.y + .9 }, ...autonomyRef.current.miners.map(miner => ({ id: miner.id, x: (miner.renderX ?? miner.x) + .325, y: (miner.renderY ?? miner.y) + .9 }))]
     return entries.map(entry => ({ ...entry, point: worldToScreen(entry.x, entry.y) })).sort((a, b) => Math.hypot(a.point.x - x, a.point.y - y) - Math.hypot(b.point.x - x, b.point.y - y)).find(entry => Math.hypot(entry.point.x - x, entry.point.y - y) <= 25 / scale)
   }
 

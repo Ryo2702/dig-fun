@@ -102,6 +102,15 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
     if (burst.level > 1) { rect(x - radius, y - radius, 1, 4, '#f5d984'); rect(x + radius, y + radius - 4, 1, 4, '#c3a4ed') }
   }
   drawCrew(ctx, crew, cx, cy, visibleWidth, visibleHeight, g.time, settings.reduced)
+  if (crew?.debug) {
+    for (const miner of crew.miners.filter(item => Math.hypot(item.x - cx / 16, item.y - cy / 16) < 22)) {
+      const path = miner.route || []
+      path.slice(0, 28).forEach((cell, index) => rect(cell.x * 16 + 6, cell.y * 16 + 6, 4, 4, index === path.length - 1 ? '#ffcf77' : '#76b7a6'))
+      if (miner.target) rect(miner.target.x * 16, miner.target.y * 16, 16, 16, '#ff7763')
+      text(`${miner.id}:${miner.state} r${miner.recovery || 0}`, (miner.x || 0) * 16 - 8, (miner.y || 0) * 16 - 29, '#f1d98b')
+    }
+    for (const reservation of crew.reservations || []) rect(reservation.x * 16 + 4, reservation.y * 16 + 4, 8, 8, '#dca5ef')
+  }
   let frame = ({ idle: 0, starting: 1, stopping: 2, turning: 3, jumping: 6, falling: 7, landing: 9, crouching: 9, 'dig-side': 10, 'dig-up': 11, 'dig-down': 12, climbing: 14, celebrating: 15, tired: 16, carrying: 17, damage: 18, pushing: 19 })[p.state] ?? 0
   if (p.state === 'walking') frame = 1 + Math.floor(g.time * 12) % 4
   if (p.state.startsWith('dig') && Math.floor(g.time * 12) % 2) frame = 13
@@ -150,9 +159,10 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
 function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
   if (!crew?.miners || crew.crewIntroduced === false) return
   const centerX = cx / 16 + width / 32, centerY = cy / 16 + height / 32
-  const visible = crew.miners.filter(miner => Math.hypot(miner.x - centerX, miner.y - centerY) < 48).sort((a, b) => Math.hypot(a.x - centerX, a.y - centerY) - Math.hypot(b.x - centerX, b.y - centerY))
+  const visual = miner => ({ x: miner.renderX ?? miner.x, y: miner.renderY ?? miner.y })
+  const visible = crew.miners.filter(miner => { const point = visual(miner); return Math.hypot(point.x - centerX, point.y - centerY) < 48 }).sort((a, b) => { const ap = visual(a), bp = visual(b); return Math.hypot(ap.x - centerX, ap.y - centerY) - Math.hypot(bp.x - centerX, bp.y - centerY) })
   for (const [index, miner] of visible.slice(0, 72).entries()) {
-    const mx = Math.round((miner.x + .325) * 16 - cx), my = Math.round((miner.y + .9) * 16 - cy)
+    const point = visual(miner), mx = Math.round((point.x + .325) * 16 - cx), my = Math.round((point.y + .9) * 16 - cy)
     if (mx < -30 || mx > width + 30 || my < -60 || my > height + 30) continue
     if (index >= 18) {
       ctx.fillStyle = miner.appearance?.lamp === 'purple lamp' ? '#c7a7ef' : '#f3d68f'
