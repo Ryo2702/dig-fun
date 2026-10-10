@@ -32,7 +32,7 @@ function sprites() {
 }
 export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, crew = null) {
   ctx.imageSmoothingEnabled = false
-  const p = g.player, palette = palettes[zoneAt(p.y)], targetX = Math.max(0, Math.min(WIDTH * TILE - width, (p.x + .325) * TILE - width * .43 + p.facing * 22 + inspect)), targetY = Math.max(0, Math.min(HEIGHT * TILE - height, p.y * TILE - height * .43))
+  const p = g.player, followed = crew?.followId && crew.miners?.find(miner => miner.id === crew.followId), focus = followed || p, palette = palettes[zoneAt(focus.y)], targetX = Math.max(0, Math.min(WIDTH * TILE - width, (focus.x + .325) * TILE - width * .43 + (focus.facing || 1) * 22 + (followed ? 0 : inspect))), targetY = Math.max(0, Math.min(HEIGHT * TILE - height, focus.y * TILE - height * .43))
   camera.x += (targetX - camera.x) * (settings.reduced ? 1 : .12); camera.y += (targetY - camera.y) * (settings.reduced ? 1 : .14)
   const bump = settings.shake && !settings.reduced && g.shake > 0 ? (Math.floor(g.time * 70) % 2 ? 1 : -1) * (g.shake > .1 ? 3 : 1) : 0
   camera.drawX = Math.round(camera.x) + bump; camera.drawY = Math.round(camera.y)
@@ -89,6 +89,11 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
     text('06 / ABANDONED SHAFT', 7 * 16, 3 * 16 - 4, '#7a8067')
   }
   for (const d of g.drops) if (g.seen[keyOf(d.x, d.y)]) { const x = d.x * 16 + 5, y = d.y * 16 + 7; rect(x + 2, y, 3, 2, ORE_COLORS[d.type]); rect(x, y + 2, 7, 3, ORE_COLORS[d.type]); rect(x + 2, y + 5, 3, 2, ORE_COLORS[d.type]); rect(x + 2, y + 1, 1, 2, '#fff2cf') }
+  if (g.communityBurst?.until > g.time) {
+    const burst = g.communityBurst, progress = 1 - (burst.until - g.time) / 1.4, radius = Math.round(8 + progress * (24 + burst.level * 9)), x = burst.x * 16, y = burst.y * 16
+    rect(x - radius, y, radius * 2, 1, '#f5d984'); rect(x, y - radius, 1, radius * 2, '#c3a4ed')
+    if (burst.level > 1) { rect(x - radius, y - radius, 1, 4, '#f5d984'); rect(x + radius, y + radius - 4, 1, 4, '#c3a4ed') }
+  }
   drawCrew(ctx, crew, cx, cy, width, height, g.time, settings.reduced)
   let frame = ({ idle: 0, starting: 1, stopping: 2, turning: 3, jumping: 6, falling: 7, landing: 9, crouching: 9, 'dig-side': 10, 'dig-up': 11, 'dig-down': 12, climbing: 14, celebrating: 15, tired: 16, carrying: 17, damage: 18, pushing: 19 })[p.state] ?? 0
   if (p.state === 'walking') frame = 1 + Math.floor(g.time * 12) % 4
@@ -136,28 +141,37 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
 
 function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
   if (!crew?.miners || crew.crewIntroduced === false) return
-  const visible = [...crew.miners].sort((a, b) => Math.hypot(a.x - cx / 16, a.y - cy / 16) - Math.hypot(b.x - cx / 16, b.y - cy / 16))
-  for (const miner of visible) {
+  const centerX = cx / 16 + width / 32, centerY = cy / 16 + height / 32
+  const visible = crew.miners.filter(miner => Math.hypot(miner.x - centerX, miner.y - centerY) < 48).sort((a, b) => Math.hypot(a.x - centerX, a.y - centerY) - Math.hypot(b.x - centerX, b.y - centerY))
+  for (const [index, miner] of visible.slice(0, 72).entries()) {
     const mx = Math.round((miner.x + .325) * 16 - cx), my = Math.round((miner.y + .9) * 16 - cy)
     if (mx < -30 || mx > width + 30 || my < -60 || my > height + 30) continue
+    if (index >= 18) {
+      ctx.fillStyle = miner.appearance?.lamp === 'purple lamp' ? '#c7a7ef' : '#f3d68f'
+      ctx.fillRect(mx + 2, my - 17, 3, 3)
+      if (miner.state === 'celebrating' && !reduced) ctx.fillRect(mx - 2, my - 21 - Math.floor((time + miner.index) * 3) % 3, 2, 2)
+      continue
+    }
     const bob = reduced ? 0 : miner.state === 'walking' ? Math.floor((time + miner.index) * 8) % 2 : 0
+    const appearance = miner.appearance || {}
     ctx.save()
     ctx.translate(mx, my - bob)
     ctx.scale(miner.facing || 1, 1)
     ctx.fillStyle = '#111714'
     ctx.fillRect(-7, -17, 14, 16)
-    ctx.fillStyle = miner.color || '#c7bd9d'
+    if (appearance.backpack) { ctx.fillStyle = '#695642'; ctx.fillRect(-8, -9, 3, 8) }
+    ctx.fillStyle = appearance.outfit || miner.color || '#c7bd9d'
     ctx.fillRect(-6, -14, 12, 8)
     ctx.fillStyle = '#1d221b'
     ctx.fillRect(-5, -7, 10, 8)
-    ctx.fillStyle = miner.color || '#c7bd9d'
+    ctx.fillStyle = appearance.helmet || miner.color || '#c7bd9d'
     ctx.fillRect(-6, -21, 12, 5)
-    ctx.fillStyle = '#f3d68f'
+    ctx.fillStyle = appearance.skin || '#f3d68f'
     ctx.fillRect(2, -19, 3, 3)
     ctx.fillStyle = '#d4b16d'
     ctx.fillRect(-5, 1, 4, 3)
     ctx.fillRect(2, 1, 4, 3)
-    ctx.fillStyle = miner.state === 'mining' ? '#fff1a4' : miner.color || '#c7bd9d'
+    ctx.fillStyle = miner.state === 'mining' ? '#fff1a4' : appearance.helmet || miner.color || '#c7bd9d'
     if (miner.tool?.includes('drill') || miner.tool?.includes('laser')) {
       ctx.fillRect(5, -12, 8, 3)
       ctx.fillRect(12, -11, 3, 2)
@@ -169,6 +183,11 @@ function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
       ctx.fillStyle = '#ffbd5d'
       ctx.fillRect(10, -5, 2, 2)
       ctx.fillRect(14, -9, 1, 1)
+    }
+    if (miner.state === 'celebrating' && !reduced) {
+      ctx.fillStyle = '#f8dd91'
+      ctx.fillRect(-11, -26 - Math.floor((time + miner.index) * 3) % 3, 2, 2)
+      ctx.fillRect(10, -29 + Math.floor((time + miner.index) * 2) % 3, 2, 2)
     }
     ctx.restore()
   }

@@ -1,5 +1,6 @@
 import { awardSOL, rewardAmount } from './sol.js'
 import { hash, keyOf, playerTile, solid, tile, WIDTH, HEIGHT } from './world.js'
+import { activityConfig, createDemoPurchase, formatPurchase, minerTraits, purchaseTier, shortenAddress, PURCHASE_TIERS } from './activity.js'
 
 export const AUTONOMY_KEY = 'dig-fun-autonomy-v1'
 export const MAX_OFFLINE_SECONDS = 90 * 60
@@ -50,6 +51,23 @@ function nextRandom(state) {
 function makeMiner(profile, index) {
   return {
     ...profile,
+    kind: profile.kind || 'npc',
+    wallet: profile.wallet || '',
+    address: profile.address || profile.wallet || '',
+    purchaseCount: profile.purchaseCount || 0,
+    purchaseVolume: profile.purchaseVolume || 0,
+    verifiedVolume: profile.verifiedVolume || 0,
+    joinedAt: profile.joinedAt || 0,
+    purchaseTier: profile.purchaseTier || 'small',
+    appearance: profile.appearance || minerTraits(profile.wallet || profile.id),
+    boostUntil: 0,
+    spawnUntil: 0,
+    celebrateUntil: 0,
+    lastActive: 0,
+    backgroundClock: 0,
+    rarest: null,
+    power: profile.power || 1,
+    baseSpeed: profile.speed,
     index,
     facing: index % 3 === 0 ? -1 : 1,
     state: 'idle',
@@ -74,8 +92,9 @@ function makeMiner(profile, index) {
 }
 
 export function createAutonomy(now = Date.now()) {
+  const source = activityConfig()
   return {
-    version: 1,
+    version: 2,
     seed: 184467,
     time: 0,
     lastActive: now,
@@ -91,18 +110,22 @@ export function createAutonomy(now = Date.now()) {
     event: null,
     nextEvent: 18,
     mute: false,
-    crewIntroduced: false,
+    crewIntroduced: true,
+    followId: 'dan',
+    openingFollowUntil: 4.5,
     auto: { enabled: true, strategy: 'follow-sparkles', target: null, suggestion: null, status: 'Inspecting the surrounding blocks.', decision: 'Inspecting the surrounding blocks.', distance: 0, confidence: 73 },
     puzzle: null,
     records: {},
     offline: null,
+    community: { blocks: 0, depth: 0, buys: 0, verifiedBuys: 0, simulatedBuys: 0, ore: { copper: 0, silver: 0, gold: 0, diamond: 0, sol: 0 }, artifacts: 0, puzzles: 0, explosions: 0, cooperation: 0 },
+    activity: { source, mode: source.mode, liveAvailable: source.mode === 'live', error: '', lastChecked: 0, nextDemo: 7, demoIndex: 0, seenSignatures: [], transactions: [], join: null },
     miners: PROFILE_SEED.map(makeMiner),
   }
 }
 
 export function restoreAutonomy(value, now = Date.now()) {
   const fresh = createAutonomy(now)
-  if (!value || value.version !== 1) return fresh
+  if (!value || ![1, 2].includes(value.version)) return fresh
   fresh.seed = integer(value.seed, fresh.seed, 1, 0xffffffff)
   fresh.time = finite(value.time, 0, 0, 10_000_000)
   fresh.lastActive = finite(value.lastActive, now, 0, now + 86_400_000)
@@ -111,7 +134,9 @@ export function restoreAutonomy(value, now = Date.now()) {
   fresh.ticker = typeof value.ticker === 'string' ? value.ticker.slice(0, 140) : fresh.ticker
   fresh.feed = Array.isArray(value.feed) ? value.feed.filter(item => typeof item === 'string').slice(0, 30) : fresh.feed
   fresh.mute = value.mute === true
-  fresh.crewIntroduced = value.crewIntroduced === true
+  fresh.crewIntroduced = value.crewIntroduced !== false
+  fresh.followId = typeof value.followId === 'string' ? value.followId.slice(0, 100) : null
+  fresh.openingFollowUntil = 0
   if (value.auto && typeof value.auto === 'object') {
     fresh.auto.strategy = Object.hasOwn(AUTO_STRATEGIES, value.auto.strategy) ? value.auto.strategy : fresh.auto.strategy
     fresh.auto.enabled = true
@@ -119,8 +144,34 @@ export function restoreAutonomy(value, now = Date.now()) {
     fresh.auto.status = typeof value.auto.status === 'string' ? value.auto.status.slice(0, 48) : fresh.auto.status
     fresh.auto.confidence = integer(value.auto.confidence, 73, 0, 100)
   }
+  if (value.community && typeof value.community === 'object') {
+    fresh.community = {
+      ...fresh.community,
+      blocks: integer(value.community.blocks, 0, 0, 10_000_000),
+      depth: finite(value.community.depth, 0, 0, HEIGHT * 10),
+      buys: integer(value.community.buys, 0, 0, 1_000_000),
+      verifiedBuys: integer(value.community.verifiedBuys, 0, 0, 1_000_000),
+      simulatedBuys: integer(value.community.simulatedBuys, 0, 0, 1_000_000),
+      artifacts: integer(value.community.artifacts, 0, 0, 1_000_000),
+      puzzles: integer(value.community.puzzles, 0, 0, 1_000_000),
+      explosions: integer(value.community.explosions, 0, 0, 1_000_000),
+      cooperation: integer(value.community.cooperation, 0, 0, 1_000_000),
+      ore: Object.fromEntries(Object.keys(fresh.community.ore).map(type => [type, integer(value.community.ore?.[type], 0, 0, 10_000_000)])),
+    }
+  }
+  if (value.activity && typeof value.activity === 'object') {
+    fresh.activity.mode = value.activity.mode === 'live' && fresh.activity.source.liveConfigured ? 'live' : 'demo'
+    fresh.activity.liveAvailable = value.activity.liveAvailable === true && fresh.activity.mode === 'live'
+    fresh.activity.error = typeof value.activity.error === 'string' ? value.activity.error.slice(0, 120) : ''
+    fresh.activity.lastChecked = finite(value.activity.lastChecked, 0, 0, now)
+    fresh.activity.nextDemo = finite(value.activity.nextDemo, 7, 0, 100000)
+    fresh.activity.demoIndex = integer(value.activity.demoIndex, 0, 0, 1_000_000)
+    fresh.activity.seenSignatures = Array.isArray(value.activity.seenSignatures) ? value.activity.seenSignatures.filter(item => typeof item === 'string').slice(-200) : []
+    fresh.activity.transactions = Array.isArray(value.activity.transactions) ? value.activity.transactions.filter(item => item && typeof item.id === 'string').slice(0, 30) : []
+  }
+  const savedMiners = Array.isArray(value.miners) ? value.miners : []
   fresh.miners = fresh.miners.map((miner) => {
-    const saved = Array.isArray(value.miners) ? value.miners.find(item => item?.id === miner.id) : null
+    const saved = savedMiners.find(item => item?.id === miner.id)
     if (!saved) return miner
     return {
       ...miner,
@@ -138,14 +189,44 @@ export function restoreAutonomy(value, now = Date.now()) {
       emptyChests: integer(saved.emptyChests, 0, 0, 100_000),
       streak: integer(saved.streak, 0, 0, 100_000),
       haul: Object.fromEntries(Object.keys(miner.haul).map(type => [type, integer(saved.haul?.[type], 0, 0, 1_000_000)])),
+      kind: miner.kind,
+      wallet: miner.wallet,
+      address: miner.address,
+      purchaseCount: integer(saved.purchaseCount, miner.purchaseCount, 0, 1_000_000),
+      purchaseVolume: finite(saved.purchaseVolume, miner.purchaseVolume, 0, 1_000_000_000),
+      verifiedVolume: finite(saved.verifiedVolume, miner.verifiedVolume, 0, 1_000_000_000),
+      joinedAt: finite(saved.joinedAt, miner.joinedAt, 0, 10_000_000),
+      purchaseTier: typeof saved.purchaseTier === 'string' ? saved.purchaseTier.slice(0, 20) : miner.purchaseTier,
+      appearance: saved.appearance && typeof saved.appearance === 'object' ? { ...miner.appearance, ...saved.appearance } : miner.appearance,
+      rarest: typeof saved.rarest === 'string' ? saved.rarest.slice(0, 30) : miner.rarest,
+      power: finite(saved.power, miner.power, 1, 10),
+      baseSpeed: finite(saved.baseSpeed, miner.baseSpeed, .1, 10),
+      celebrateUntil: finite(saved.celebrateUntil, 0, 0, 10_000_000),
     }
   })
+  for (const saved of savedMiners.filter(item => item?.kind === 'buyer').slice(0, 300)) {
+    if (!saved.id || fresh.miners.some(miner => miner.id === saved.id)) continue
+    const profile = {
+      id: saved.id,
+      name: typeof saved.name === 'string' ? saved.name.slice(0, 30) : shortenAddress(saved.wallet),
+      role: typeof saved.role === 'string' ? saved.role.slice(0, 24) : 'COMMUNITY MINER',
+      personality: typeof saved.personality === 'string' ? saved.personality.slice(0, 70) : 'digs with the community',
+      color: typeof saved.color === 'string' ? saved.color : '#d0a57b',
+      tool: typeof saved.tool === 'string' ? saved.tool.slice(0, 30) : 'Rusty pickaxe',
+      x: finite(saved.x, 8, 1, WIDTH - 2), y: finite(saved.y, 7.05, 2, HEIGHT - 2), speed: finite(saved.baseSpeed || saved.speed, 1, .1, 10),
+      wallet: typeof saved.wallet === 'string' ? saved.wallet.slice(0, 80) : '', address: typeof saved.address === 'string' ? saved.address.slice(0, 80) : '',
+      kind: 'buyer', purchaseCount: integer(saved.purchaseCount, 1, 0, 1_000_000), purchaseVolume: finite(saved.purchaseVolume, 0, 0, 1_000_000_000), verifiedVolume: finite(saved.verifiedVolume, 0, 0, 1_000_000_000), joinedAt: finite(saved.joinedAt, 0, 0, 10_000_000), purchaseTier: typeof saved.purchaseTier === 'string' ? saved.purchaseTier.slice(0, 20) : 'small', appearance: saved.appearance, power: finite(saved.power, 1, 1, 10),
+    }
+    const miner = makeMiner(profile, fresh.miners.length)
+    Object.assign(miner, saved, { kind: 'buyer', index: fresh.miners.length, appearance: profile.appearance || miner.appearance })
+    fresh.miners.push(miner)
+  }
   return fresh
 }
 
 export function serializeAutonomy(state) {
   return {
-    version: 1,
+    version: 2,
     seed: state.seed,
     time: state.time,
     lastActive: state.lastActive,
@@ -155,8 +236,11 @@ export function serializeAutonomy(state) {
     feed: state.feed.slice(0, 30),
     mute: state.mute,
     crewIntroduced: state.crewIntroduced,
+    followId: state.followId,
     auto: { enabled: true, strategy: state.auto.strategy, status: state.auto.status, decision: state.auto.decision, confidence: state.auto.confidence },
-    miners: state.miners.map(miner => ({ id: miner.id, x: miner.x, y: miner.y, facing: miner.facing, state: miner.state, speech: miner.speech, goal: miner.goal, blocks: miner.blocks, deepest: miner.deepest, puzzles: miner.puzzles, explosions: miner.explosions, lavaIncidents: miner.lavaIncidents, emptyChests: miner.emptyChests, streak: miner.streak, haul: miner.haul })),
+    community: state.community,
+    activity: { ...state.activity, source: state.activity.source, join: null },
+    miners: state.miners.slice(0, 308).map(miner => ({ id: miner.id, name: miner.name, kind: miner.kind, wallet: miner.wallet, address: miner.address, role: miner.role, personality: miner.personality, color: miner.color, tool: miner.tool, x: miner.x, y: miner.y, facing: miner.facing, state: miner.state, speech: miner.speech, goal: miner.goal, blocks: miner.blocks, deepest: miner.deepest, puzzles: miner.puzzles, explosions: miner.explosions, lavaIncidents: miner.lavaIncidents, emptyChests: miner.emptyChests, streak: miner.streak, haul: miner.haul, purchaseCount: miner.purchaseCount, purchaseVolume: miner.purchaseVolume, verifiedVolume: miner.verifiedVolume, joinedAt: miner.joinedAt, purchaseTier: miner.purchaseTier, appearance: miner.appearance, rarest: miner.rarest, power: miner.power, baseSpeed: miner.baseSpeed, celebrateUntil: miner.celebrateUntil })),
   }
 }
 
@@ -168,6 +252,126 @@ function announce(state, message, major = null) {
   if (major) state.major = { ...major, id: String(state.time) + ':' + message }
 }
 
+const BUYER_ROLES = ['TREASURE HUNTER', 'DEEP DIGGER', 'CAREFUL MINER', 'CHAOS MINER', 'PUZZLE HUNTER', 'COLLECTOR', 'SOL SEEKER']
+const BUYER_PERSONALITIES = ['follows useful signals', 'likes safe routes', 'tests every switch', 'collects suspicious things', 'wants the deepest tunnel', 'never ignores a sparkle', 'digs with the community']
+const RARE_ORDER = ['copper', 'silver', 'gold', 'diamond', 'sol']
+
+function tierRank(id) {
+  return Math.max(0, PURCHASE_TIERS.findIndex(tier => tier.id === id))
+}
+
+function activityLabel(event) {
+  return event.verified ? 'LIVE ON-CHAIN ACTIVITY · RPC VERIFIED' : 'SIMULATED MINE ACTIVITY'
+}
+
+function communityBurst(g, tier) {
+  const level = tierRank(tier.id)
+  const count = level >= 4 ? 30 : level >= 3 ? 20 : level >= 2 ? 12 : 7
+  g.shake = Math.min(.68, Math.max(g.shake || 0, .14 + level * .12))
+  g.communityBurst = { x: 7.8, y: 7, level, until: g.time + 1.4 }
+  g.particles ||= []
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2
+    g.particles.push({ x: 7.8, y: 7, vx: Math.cos(angle) * (1 + level * .35), vy: -1.5 - Math.abs(Math.sin(angle)) * 2, life: .35 + (i % 5) * .06, color: i % 3 === 0 ? '#f4d47f' : i % 3 === 1 ? '#9cc48f' : '#c6a4ed' })
+  }
+  if (g.particles.length > (g.particleLimit || 96)) g.particles.splice(0, g.particles.length - (g.particleLimit || 96))
+}
+
+function createBuyerMiner(state, event, tier) {
+  const wallet = String(event.wallet || event.address || 'UNKNOWN')
+  const appearance = minerTraits(wallet)
+  const index = state.miners.length
+  const role = BUYER_ROLES[appearance.seed % BUYER_ROLES.length]
+  const profile = {
+    id: `buyer-${Math.floor(state.time * 10)}-${index}`,
+    name: shortenAddress(wallet),
+    role,
+    personality: BUYER_PERSONALITIES[appearance.seed % BUYER_PERSONALITIES.length],
+    color: appearance.outfit,
+    tool: tier.equipment,
+    x: 7.2 + (index % 5) * .75,
+    y: 5.15,
+    speed: tier.speed,
+    kind: 'buyer',
+    wallet,
+    address: wallet,
+    purchaseCount: 1,
+    purchaseVolume: Math.max(0, Number(event.amount) || 0),
+    verifiedVolume: event.verified ? Math.max(0, Number(event.amount) || 0) : 0,
+    joinedAt: state.time,
+    purchaseTier: tier.id,
+    appearance,
+    power: 1 + tierRank(tier.id) * .35,
+  }
+  const miner = makeMiner(profile, index)
+  miner.state = 'spawning'
+  miner.status = 'Entering the mine'
+  miner.goal = 'Finding a safe first tunnel.'
+  miner.spawnUntil = state.time + 1.5
+  miner.celebrateUntil = state.time + 3.4
+  miner.spawnY = 7.05
+  return miner
+}
+
+export function spawnBuyer(state, g, event) {
+  if (!state?.activity || !event?.wallet) return null
+  const amount = Math.max(0, Number(event.amount) || 0)
+  const tier = purchaseTier(amount, state.activity.source.tiers)
+  const wallet = String(event.wallet)
+  const existing = state.miners.find(miner => miner.kind === 'buyer' && miner.wallet === wallet)
+  const source = activityLabel(event)
+  const purchase = { id: event.id || event.signature || `${wallet}:${state.time}`, name: shortenAddress(wallet), wallet, amount, unit: event.unit || state.activity.source.unit, source: event.source || 'demo', verified: event.verified === true, tier: tier.id, at: state.time }
+  state.activity.transactions.unshift(purchase)
+  state.activity.transactions = state.activity.transactions.slice(0, 30)
+  state.community.buys++
+  if (event.verified) state.community.verifiedBuys++
+  else state.community.simulatedBuys++
+  if (existing) {
+    existing.purchaseCount++
+    existing.purchaseVolume += amount
+    if (event.verified) existing.verifiedVolume += amount
+    existing.boostUntil = state.time + 20
+    existing.celebrateUntil = state.time + 2.4
+    existing.state = 'celebrating'
+    existing.status = 'Celebrating a repeat buy'
+    existing.speech = 'Again? The drill is already warm.'
+    if (tierRank(tier.id) > tierRank(existing.purchaseTier)) {
+      existing.purchaseTier = tier.id
+      existing.tool = tier.equipment
+      existing.baseSpeed = tier.speed
+      existing.speed = tier.speed
+      existing.power = Math.max(existing.power, 1 + tierRank(tier.id) * .35)
+    }
+    let assistant = null
+    if (tier.id === 'exceptional' && existing.purchaseCount % 2 === 0 && state.miners.length < 308) {
+      assistant = createBuyerMiner(state, { ...event, wallet }, PURCHASE_TIERS[0])
+      assistant.name = `${existing.name} ASSIST`
+      assistant.wallet = wallet
+      assistant.address = wallet
+      assistant.purchaseCount = 0
+      assistant.purchaseVolume = 0
+      assistant.verifiedVolume = 0
+      assistant.status = 'Following the crew into the mine'
+      state.miners.push(assistant)
+    }
+    state.activity.join = { ...purchase, title: 'DIGGER POWERED UP', subtitle: `${existing.name} bought again · ${tier.label}${assistant ? ' · assistant recruited' : ''}`, sourceLabel: source, until: state.time + 4, minerId: existing.id, repeat: true }
+    announce(state, `${existing.name} upgraded to ${tier.label.toLowerCase()}.`, { title: 'DIGGER POWERED UP', subtitle: `${existing.name} bought again · drill boost for 20 seconds`, sourceLabel: source, color: existing.color, minerId: existing.id })
+    communityBurst(g, tier)
+    return existing
+  }
+  const miner = createBuyerMiner(state, event, tier)
+  state.miners.push(miner)
+  state.activity.join = { ...purchase, title: 'NEW DIGGER JOINED', subtitle: `${miner.name} bought ${formatPurchase(amount, purchase.unit)} · ${tier.label}`, sourceLabel: source, until: state.time + 4, minerId: miner.id }
+  announce(state, `${miner.name} entered the mine.`, { title: 'NEW DIGGER JOINED', subtitle: `${formatPurchase(amount, purchase.unit)} · ${tier.label}`, sourceLabel: source, color: miner.color, minerId: miner.id })
+  communityBurst(g, tier)
+  if (tier.id === 'exceptional') {
+    state.event = { name: 'Drill Frenzy', phase: 'active', remaining: 18 }
+    state.community.event = 'Drill Frenzy'
+    state.major = { title: 'LARGEST BUY OF THE SESSION', subtitle: `${miner.name} powered up the whole shaft · community drill frenzy`, sourceLabel: source, color: '#d4b3ff', minerId: miner.id, id: String(state.time) + ':largest-buy' }
+  }
+  return miner
+}
+
 function speak(miner, message, state, duration = 4) {
   miner.speech = message
   miner.speechUntil = state.time + duration
@@ -176,6 +380,7 @@ function speak(miner, message, state, duration = 4) {
 function clearTarget(miner) {
   miner.target = null
   miner.targetType = null
+  miner.route = null
   miner.mineProgress = 0
 }
 
@@ -208,18 +413,23 @@ function candidateScore(type, x, y, miner, state, g, p) {
 }
 
 function chooseTarget(state, g, miner) {
+  revealMinerArea(g, miner)
   const origin = { x: Math.floor(miner.x), y: Math.floor(miner.y) }
   let best = null
   for (let y = Math.max(2, origin.y - 3); y <= Math.min(HEIGHT - 2, origin.y + 4); y++) for (let x = Math.max(1, origin.x - 6); x <= Math.min(WIDTH - 2, origin.x + 6); x++) {
     const type = tile(g, x, y)
-    if (!solid(type) || ['bedrock', 'debris'].includes(type)) continue
+    if (!solid(type) || ['bedrock', 'debris'].includes(type) || !g.seen[keyOf(x, y)]) continue
+    if (type === 'sealed' && !g.artifacts.some(artifact => artifact.solved)) continue
     const distance = Math.abs(x - origin.x) + Math.abs(y - origin.y)
     if (!distance || distance > 8) continue
+    const route = routeToBlock(g, origin, { x, y })
+    if (!route) continue
     const score = candidateScore(type, x, y, miner, state, g, miner)
-    if (!best || score > best.score) best = { x, y, type, score }
+    if (!best || score > best.score) best = { x, y, type, score, route }
   }
   if (!best) return null
   miner.target = { x: best.x, y: best.y }
+  miner.route = best.route
   miner.targetType = best.type
   miner.mineProgress = 0
   miner.goal = best.type === 'casing' || best.type === 'sealed' ? 'Inspecting a sealed chamber.' : best.type === 'sol' ? 'Chasing a SOL crystal.' : 'Investigating ' + best.type + ' signal.'
@@ -233,12 +443,32 @@ function isOpen(g, x, y) {
   return !solid(type) || type === 'ladder'
 }
 
+function revealMinerArea(g, miner) {
+  const origin = { x: Math.floor(miner.x), y: Math.floor(miner.y) }
+  const queue = [origin]
+  const visited = new Set([keyOf(origin.x, origin.y)])
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i]
+    g.seen[keyOf(current.x, current.y)] = true
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = current.x + dx, y = current.y + dy, id = keyOf(x, y)
+      if (x < 1 || y < 1 || x >= WIDTH - 1 || y >= HEIGHT - 1 || visited.has(id) || Math.hypot(x - origin.x, y - origin.y) > 6) continue
+      visited.add(id)
+      g.seen[id] = true
+      if (isOpen(g, x, y)) queue.push({ x, y })
+    }
+  }
+}
+
 function moveMiner(state, g, miner, dt) {
   if (!miner.target) return
-  const target = miner.target
+  const floorX = Math.floor(miner.x), floorY = Math.floor(miner.y)
+  const routeIndex = miner.route?.findIndex(cell => cell.x === floorX && cell.y === floorY) ?? -1
+  const target = routeIndex >= 0 && miner.route[routeIndex + 1] ? miner.route[routeIndex + 1] : miner.target
   const dx = target.x - miner.x
   const dy = target.y - miner.y
-  const speed = miner.speed * (state.event?.name === 'Drill Frenzy' ? 1.8 : 1)
+  const boost = state.time < miner.boostUntil ? 1.35 : 1
+  const speed = (miner.baseSpeed || miner.speed) * boost * (state.event?.name === 'Drill Frenzy' ? 1.8 : 1)
   if (Math.abs(dx) > 1.05) {
     const direction = Math.sign(dx)
     const next = miner.x + direction * speed * dt
@@ -265,6 +495,7 @@ function moveMiner(state, g, miner, dt) {
     clearTarget(miner)
     return
   }
+  const type = tile(g, miner.target.x, miner.target.y)
   miner.state = 'mining'
   miner.status = type === 'casing' || type === 'sealed' ? 'Entering chamber' : type === 'lava' ? 'Avoiding lava' : 'Mining stone'
 }
@@ -275,7 +506,13 @@ function discovery(state, g, miner, type) {
   miner.blocks++
   miner.streak++
   miner.lastDiscovery = { type, at: state.time }
+  if (RARE_ORDER.includes(type) && RARE_ORDER.indexOf(type) >= RARE_ORDER.indexOf(miner.rarest)) miner.rarest = type
   g.removed[keyOf(miner.target.x, miner.target.y)] = true
+  g.broken = (g.broken || 0) + 1
+  state.community.blocks++
+  state.community.depth = Math.max(state.community.depth, Math.max(0, (miner.y - 8) * 10))
+  if (state.community.ore[type] != null) state.community.ore[type]++
+  g.communityImpact = { x: miner.target.x, y: miner.target.y, until: g.time + .18, type }
   if (type === 'diamond' || type === 'sol') announce(state, miner.name + ' found a ' + label + ' at ' + Math.round(miner.y * 10) + 'm.', { title: 'RAREST DISCOVERY', subtitle: (type === 'sol' ? 'Prismatic SOL crystal' : 'Diamond cache') + ' · found by ' + miner.name, color: type === 'sol' ? '#c88cff' : '#73ecf0', minerId: miner.id })
   else if (type === 'gold') announce(state, miner.name + ' cracked ' + miner.haul.gold + ' gold at ' + Math.round(miner.y * 10) + 'm.')
   else if (state.tickerClock > 3) announce(state, miner.name + ' collected ' + miner.haul[type] + ' ' + type + '.')
@@ -319,11 +556,14 @@ function workMiner(state, g, miner, dt) {
     clearTarget(miner)
     return
   }
-  miner.mineProgress += dt * (1 + miner.speed * .45)
+  miner.mineProgress += dt * (1 + (miner.baseSpeed || miner.speed) * .45 + (miner.power || 1) * .12)
   miner.state = 'mining'
   if (type === 'casing' || type === 'sealed') {
     if (miner.mineProgress > 1.6 && !state.puzzle) {
-      startPuzzle(state, g, miner.id)
+      const id = keyOf(miner.target.x, miner.target.y)
+      g.removed[id] = true
+      if (!g.artifacts.some(artifact => artifact.id === id)) g.artifacts.push({ id, outcome: 'puzzle', solved: false, turns: 0, dials: [0, 0, 0] })
+      startPuzzle(state, g, miner.id, id)
       clearTarget(miner)
     }
     return
@@ -340,6 +580,10 @@ function workMiner(state, g, miner, dt) {
       miner.explosions += blast
       miner.blocks += Math.max(1, Math.floor(blast / 3))
       miner.streak++
+      state.community.blocks += blast
+      state.community.explosions += blast
+      g.broken = (g.broken || 0) + blast
+      g.communityImpact = { x: miner.target.x, y: miner.target.y, until: g.time + .45, type: 'explosion' }
       g.shake = Math.max(g.shake || 0, .45)
       announce(state, miner.name + ' detonated ' + blast + ' blocks. The tunnel is “better” now.', { title: 'BIGGEST EXPLOSION', subtitle: blast + ' blocks destroyed by ' + miner.name, color: '#ffad5c', minerId: miner.id })
       speak(miner, 'Absolutely safe explosion incoming.', state, 5)
@@ -392,6 +636,11 @@ export function finishPuzzle(state, g, mode = 'manual') {
   if (miner) {
     miner.puzzles++
     miner.streak++
+    const artifact = state.puzzle.artifactId && g.artifacts.find(item => item.id === state.puzzle.artifactId)
+    if (artifact && !artifact.solved) artifact.solved = true
+    state.community.puzzles++
+    state.community.artifacts += artifact ? 1 : 0
+    miner.rarest ||= 'artifact'
     speak(miner, 'Puzzle solution found.', state, 6)
     miner.status = 'Opening artifact'
   } else {
@@ -424,31 +673,70 @@ function updateEvent(state, dt) {
   if (state.nextEvent <= 10) state.event = { name: choice(EVENTS, Math.floor(nextRandom(state) * EVENTS.length)), phase: 'countdown', remaining: 10 }
 }
 
+function tickActivity(state, g) {
+  if (state.activity.join && state.time > state.activity.join.until) state.activity.join = null
+  if (state.activity.mode !== 'demo' || state.time < state.activity.nextDemo) return
+  const index = state.activity.demoIndex++
+  spawnBuyer(state, g, createDemoPurchase(index, null, state.activity.source.unit))
+  state.activity.nextDemo = state.time + 15 + nextRandom(state) * 18
+}
+
 export function tickCrew(state, g, dt) {
   if (!state || !g || !Number.isFinite(dt) || dt <= 0) return state
   state.time += Math.min(dt, .1)
   state.tickerClock += dt
+  if (state.openingFollowUntil > 0 && state.time >= state.openingFollowUntil) {
+    state.openingFollowUntil = 0
+    if (state.followId === 'dan') state.followId = null
+  }
   if (!state.crewIntroduced && g.broken > 0) {
     state.crewIntroduced = true
     announce(state, 'The first block cracked. Rival crews are entering the shaft.')
   }
   updateEvent(state, dt)
+  tickActivity(state, g)
   updatePuzzle(state, g, dt)
   for (const miner of state.miners) {
+    miner.lastActive = state.time
+    if (miner.spawnUntil > state.time) {
+      const progress = 1 - (miner.spawnUntil - state.time) / 1.5
+      miner.y = 5.15 + (miner.spawnY - 5.15) * Math.max(0, Math.min(1, progress))
+      miner.state = 'spawning'
+      miner.status = 'Entering the mine'
+      continue
+    }
+    if (miner.celebrateUntil > state.time) {
+      miner.state = 'celebrating'
+      miner.status = miner.purchaseCount > 1 ? 'Celebrating a repeat buy' : 'Celebrating a new arrival'
+      continue
+    }
+    if (miner.state === 'celebrating') {
+      miner.state = 'idle'
+      miner.status = 'Scanning for ore'
+      miner.think = 0
+    }
     if (state.puzzle?.minerId === miner.id && !state.puzzle.done) {
       miner.state = 'inspecting'
       continue
     }
-    miner.think -= dt
+    const distance = Math.hypot(miner.x - g.player.x, miner.y - g.player.y)
+    if (distance > 42) {
+      miner.backgroundClock += dt
+      if (miner.backgroundClock < .25) continue
+      miner.backgroundClock = 0
+    }
+    const simDt = distance > 42 ? .25 : dt
+    miner.think -= simDt
     miner.deepest = Math.max(miner.deepest, Math.max(0, (miner.y - 8) * 10))
+    state.community.depth = Math.max(state.community.depth, miner.deepest)
     if (state.time > miner.speechUntil && miner.think <= 0) {
       speak(miner, choice(SPEECH[miner.role] || SPEECH.COLLECTOR, Math.floor(state.time + miner.index)), state)
       miner.think = 4 + nextRandom(state) * 4
     }
     if (!miner.target && miner.think <= 0) chooseTarget(state, g, miner)
     if (miner.target) {
-      if (Math.abs(miner.target.x - miner.x) <= 1.05 && Math.abs(miner.target.y - miner.y) <= 1.05) workMiner(state, g, miner, dt)
-      else moveMiner(state, g, miner, dt)
+      if (Math.abs(miner.target.x - miner.x) <= 1.05 && Math.abs(miner.target.y - miner.y) <= 1.05) workMiner(state, g, miner, simDt)
+      else moveMiner(state, g, miner, simDt)
     }
   }
   if (state.tickerClock > 6) {
@@ -457,6 +745,8 @@ export function tickCrew(state, g, dt) {
     state.tickerIndex++
     state.tickerClock = 0
   }
+  state.community.blocks = Math.max(state.community.blocks, g.broken || 0)
+  state.community.depth = Math.max(state.community.depth, g.deepest || 0)
   return state
 }
 

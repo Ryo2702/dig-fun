@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, startPuzzle, tickCrew } from '../src/utils/autonomy.js'
+import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, spawnBuyer, startPuzzle, tickCrew } from '../src/utils/autonomy.js'
+import { activityConfig, minerTraits, pollLiveBuys, shortenAddress } from '../src/utils/activity.js'
 import { createGame, DEFAULT_SETTINGS, reveal, step } from '../src/utils/world.js'
 
 test('autonomy creates eight named simulated miners and survives a safe round trip', () => {
@@ -80,4 +81,40 @@ test('player puzzle solving is timed and marks the local artifact solved', () =>
   for (let i = 0; i < 900 && !state.puzzle.done; i++) tickCrew(state, g, 1 / 60)
   assert.equal(state.puzzle.done, true)
   assert.equal(g.artifacts[0].solved, true)
+})
+
+test('buyer identities are deterministic, repeat buys recharge one miner, and demo activity stays labeled', () => {
+  const wallet = '7Ks9Qp4nJtF3xV8sL2mR6cD1wH5bY9aZ4eP8uN3k'
+  assert.deepEqual(minerTraits(wallet), minerTraits(wallet))
+  assert.equal(shortenAddress(wallet), '7Ks9...uN3k')
+  const state = createAutonomy(0)
+  const g = createGame()
+  const first = spawnBuyer(state, g, { id: 'buy-1', wallet, amount: 4.8, unit: 'SOL', source: 'demo', verified: false })
+  const second = spawnBuyer(state, g, { id: 'buy-2', wallet, amount: 12, unit: 'SOL', source: 'demo', verified: false })
+  assert.equal(first, second)
+  assert.equal(state.miners.filter(miner => miner.wallet === wallet).length, 1)
+  assert.equal(first.purchaseCount, 2)
+  assert.equal(first.tool, 'Gold power drill')
+  assert.equal(state.activity.join.source, 'demo')
+  assert.equal(state.community.simulatedBuys, 2)
+  spawnBuyer(state, g, { id: 'buy-3', wallet, amount: 75, unit: 'SOL', source: 'demo', verified: false })
+  spawnBuyer(state, g, { id: 'buy-4', wallet, amount: 75, unit: 'SOL', source: 'demo', verified: false })
+  assert.ok(state.miners.some(miner => miner.name.endsWith('ASSIST')))
+})
+
+test('live read-only polling only emits verified public balance deltas', async () => {
+  const mint = 'So11111111111111111111111111111111111111112'
+  const wallet = '7Ks9Qp4nJtF3xV8sL2mR6cD1wH5bY9aZ4eP8uN3k'
+  const activity = { source: { liveConfigured: true, rpcUrl: 'https://rpc.example', address: mint, coinMint: mint, poolAddress: '', unit: 'SOL' }, seenSignatures: [] }
+  const fetchMock = async (_, options) => {
+    const body = JSON.parse(options.body)
+    if (body.method === 'getSignaturesForAddress') return { ok: true, json: async () => ({ result: [{ signature: 'verified-buy' }] }) }
+    return { ok: true, json: async () => ({ result: { blockTime: 10, transaction: { message: { accountKeys: [{ pubkey: wallet, signer: true }] } }, meta: { err: null, preTokenBalances: [{ mint, owner: wallet, uiTokenAmount: { uiAmount: 0 } }], postTokenBalances: [{ mint, owner: wallet, uiTokenAmount: { uiAmount: 4.8 } }] } } }) }
+  }
+  const events = await pollLiveBuys(activity, fetchMock)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].verified, true)
+  assert.equal(events[0].wallet, wallet)
+  assert.equal(events[0].amount, 4.8)
+  assert.equal(activity.mode, 'live')
 })
