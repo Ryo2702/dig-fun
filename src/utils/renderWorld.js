@@ -30,7 +30,7 @@ function sprites() {
   }
   return atlas
 }
-export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0) {
+export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, crew = null) {
   ctx.imageSmoothingEnabled = false
   const p = g.player, palette = palettes[zoneAt(p.y)], targetX = Math.max(0, Math.min(WIDTH * TILE - width, (p.x + .325) * TILE - width * .43 + p.facing * 22 + inspect)), targetY = Math.max(0, Math.min(HEIGHT * TILE - height, p.y * TILE - height * .43))
   camera.x += (targetX - camera.x) * (settings.reduced ? 1 : .12); camera.y += (targetY - camera.y) * (settings.reduced ? 1 : .14)
@@ -89,6 +89,7 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0) 
     text('06 / ABANDONED SHAFT', 7 * 16, 3 * 16 - 4, '#7a8067')
   }
   for (const d of g.drops) if (g.seen[keyOf(d.x, d.y)]) { const x = d.x * 16 + 5, y = d.y * 16 + 7; rect(x + 2, y, 3, 2, ORE_COLORS[d.type]); rect(x, y + 2, 7, 3, ORE_COLORS[d.type]); rect(x + 2, y + 5, 3, 2, ORE_COLORS[d.type]); rect(x + 2, y + 1, 1, 2, '#fff2cf') }
+  drawCrew(ctx, crew, cx, cy, width, height, g.time, settings.reduced)
   let frame = ({ idle: 0, starting: 1, stopping: 2, turning: 3, jumping: 6, falling: 7, landing: 9, crouching: 9, 'dig-side': 10, 'dig-up': 11, 'dig-down': 12, climbing: 14, celebrating: 15, tired: 16, carrying: 17, damage: 18, pushing: 19 })[p.state] ?? 0
   if (p.state === 'walking') frame = 1 + Math.floor(g.time * 12) % 4
   if (p.state.startsWith('dig') && Math.floor(g.time * 12) % 2) frame = 13
@@ -131,4 +132,61 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0) 
     if (g.target.y > pos.y && Math.abs(g.target.x - pos.x) < 2) text(info.locked ? '! UNSAFE' : 'SAFE DROP', x - 12, y + 25, color)
   }
   if (g.escapeUntil > g.time) text('! MOVE AWAY !', p.x * 16 - 25, p.y * 16 - 26, '#ffb87b')
+}
+
+function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
+  if (!crew?.miners) return
+  const visible = [...crew.miners].sort((a, b) => Math.hypot(a.x - cx / 16, a.y - cy / 16) - Math.hypot(b.x - cx / 16, b.y - cy / 16))
+  for (const [index, miner] of visible.entries()) {
+    const mx = Math.round((miner.x + .325) * 16 - cx), my = Math.round((miner.y + .9) * 16 - cy)
+    if (mx < -30 || mx > width + 30 || my < -60 || my > height + 30) continue
+    const bob = reduced ? 0 : miner.state === 'walking' ? Math.floor((time + miner.index) * 8) % 2 : 0
+    ctx.save()
+    ctx.translate(mx, my - bob)
+    ctx.scale(miner.facing || 1, 1)
+    ctx.fillStyle = '#111714'
+    ctx.fillRect(-7, -17, 14, 16)
+    ctx.fillStyle = miner.color || '#c7bd9d'
+    ctx.fillRect(-6, -14, 12, 8)
+    ctx.fillStyle = '#1d221b'
+    ctx.fillRect(-5, -7, 10, 8)
+    ctx.fillStyle = miner.color || '#c7bd9d'
+    ctx.fillRect(-6, -21, 12, 5)
+    ctx.fillStyle = '#f3d68f'
+    ctx.fillRect(2, -19, 3, 3)
+    ctx.fillStyle = '#d4b16d'
+    ctx.fillRect(-5, 1, 4, 3)
+    ctx.fillRect(2, 1, 4, 3)
+    ctx.fillStyle = miner.state === 'mining' ? '#fff1a4' : miner.color || '#c7bd9d'
+    if (miner.tool?.includes('drill') || miner.tool?.includes('laser')) {
+      ctx.fillRect(5, -12, 8, 3)
+      ctx.fillRect(12, -11, 3, 2)
+    } else {
+      ctx.fillRect(5, -16, 2, 12)
+      ctx.fillRect(2, -17, 8, 2)
+    }
+    if (miner.role === 'CHAOS MINER' && miner.state === 'mining') {
+      ctx.fillStyle = '#ffbd5d'
+      ctx.fillRect(10, -5, 2, 2)
+      ctx.fillRect(14, -9, 1, 1)
+    }
+    ctx.restore()
+    if (index < 4) {
+      const copy = miner.speech?.length > 30 ? miner.speech.slice(0, 29) + '…' : miner.speech || miner.goal
+      ctx.font = '6px monospace'
+      const bubbleWidth = Math.min(125, Math.max(70, ctx.measureText(copy).width + 12))
+      const bubbleX = Math.max(3, Math.min(width - bubbleWidth - 3, mx - bubbleWidth / 2))
+      const bubbleY = Math.max(3, my - 38 - (index % 2) * 14)
+      ctx.fillStyle = '#111914'
+      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY), Math.round(bubbleWidth), 17)
+      ctx.fillStyle = miner.color || '#d4c89e'
+      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY), Math.round(bubbleWidth), 1)
+      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY + 16), Math.round(bubbleWidth), 1)
+      ctx.fillStyle = '#d9d3b2'
+      ctx.fillText(copy, Math.round(bubbleX + 6), Math.round(bubbleY + 10))
+      ctx.fillStyle = miner.color || '#d4c89e'
+      ctx.font = '5px monospace'
+      ctx.fillText(miner.name.toUpperCase(), Math.round(bubbleX + 6), Math.round(bubbleY + 15))
+    }
+  }
 }
