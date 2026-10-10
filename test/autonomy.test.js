@@ -102,6 +102,19 @@ test('buyer identities are deterministic, repeat buys recharge one miner, and de
   assert.ok(state.miners.some(miner => miner.name.endsWith('ASSIST')))
 })
 
+test('mine announcements queue and major banners expire locally', () => {
+  const state = createAutonomy(0)
+  const g = createGame()
+  spawnBuyer(state, g, { id: 'queue-1', wallet: '7Ks9Qp4nJtF3xV8sL2mR6cD1wH5bY9aZ4eP8uN3k', amount: 1.2, unit: 'SOL', source: 'demo', verified: false })
+  spawnBuyer(state, g, { id: 'queue-2', wallet: '3Hp4Qp4nJtF3xV8sL2mR6cD1wH5bY9aZ4eP8uN3k', amount: 4.8, unit: 'SOL', source: 'demo', verified: false })
+  assert.ok(state.noticeCurrent)
+  assert.ok(state.noticeQueue.length >= 1)
+  state.major = { id: 'test-major', title: 'TEST', subtitle: 'local', expires: state.time + .5 }
+  for (let i = 0; i < 40; i++) tickCrew(state, g, 1 / 60)
+  assert.equal(state.major, null)
+  assert.notEqual(state.ticker, '')
+})
+
 test('live read-only polling only emits verified public balance deltas', async () => {
   const mint = 'So11111111111111111111111111111111111111112'
   const wallet = '7Ks9Qp4nJtF3xV8sL2mR6cD1wH5bY9aZ4eP8uN3k'

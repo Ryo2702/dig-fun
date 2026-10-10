@@ -101,6 +101,8 @@ export function createAutonomy(now = Date.now()) {
     tickerIndex: 0,
     tickerClock: 0,
     ticker: 'Drillbit Dan is scanning the abandoned entrance.',
+    noticeCurrent: null,
+    noticeQueue: [],
     feed: [
       'The mine is awake. Eight simulated crews are already moving.',
       'Diamond Hands has marked the lava route as “probably fine.”',
@@ -132,6 +134,8 @@ export function restoreAutonomy(value, now = Date.now()) {
   fresh.tickerIndex = integer(value.tickerIndex, 0, 0, 9999)
   fresh.tickerClock = finite(value.tickerClock, 0, 0, 60)
   fresh.ticker = typeof value.ticker === 'string' ? value.ticker.slice(0, 140) : fresh.ticker
+  fresh.noticeCurrent = value.noticeCurrent && typeof value.noticeCurrent.message === 'string' ? { message: value.noticeCurrent.message.slice(0, 140), expires: finite(value.noticeCurrent.expires, fresh.time + 4, fresh.time, fresh.time + 60) } : null
+  fresh.noticeQueue = Array.isArray(value.noticeQueue) ? value.noticeQueue.filter(item => item && typeof item.message === 'string').slice(0, 20).map(item => ({ message: item.message.slice(0, 140), expires: finite(item.expires, fresh.time + 4, fresh.time, fresh.time + 60) })) : []
   fresh.feed = Array.isArray(value.feed) ? value.feed.filter(item => typeof item === 'string').slice(0, 30) : fresh.feed
   fresh.mute = value.mute === true
   fresh.crewIntroduced = value.crewIntroduced !== false
@@ -233,6 +237,8 @@ export function serializeAutonomy(state) {
     tickerIndex: state.tickerIndex,
     tickerClock: state.tickerClock,
     ticker: state.ticker,
+    noticeCurrent: state.noticeCurrent,
+    noticeQueue: state.noticeQueue.slice(0, 20),
     feed: state.feed.slice(0, 30),
     mute: state.mute,
     crewIntroduced: state.crewIntroduced,
@@ -247,9 +253,24 @@ export function serializeAutonomy(state) {
 function announce(state, message, major = null) {
   state.feed.unshift(message)
   state.feed = state.feed.slice(0, 30)
-  state.ticker = message
-  state.tickerClock = 0
-  if (major) state.major = { ...major, id: String(state.time) + ':' + message }
+  const group = message.match(/\b(copper|silver|gold)\b/i)?.[1]?.toLowerCase()
+  const merge = item => {
+    const itemGroup = item?.message?.match(/\b(copper|silver|gold)\b/i)?.[1]?.toLowerCase()
+    return group && itemGroup === group
+  }
+  const current = { message, expires: state.time + 4 }
+  const existing = merge(state.noticeCurrent) ? state.noticeCurrent : state.noticeQueue.find(merge)
+  if (existing) {
+    existing.message = `${(existing.count || 1) + 1} miners discovered ${group} nearby.`
+    existing.count = (existing.count || 1) + 1
+    existing.expires = state.time + 4
+    if (existing === state.noticeCurrent) state.ticker = existing.message
+  } else if (!state.noticeCurrent) {
+    state.noticeCurrent = current
+    state.ticker = message
+    state.tickerClock = 0
+  } else state.noticeQueue.push(current)
+  if (major) state.major = { ...major, id: String(state.time) + ':' + message, expires: state.time + 6 }
 }
 
 const BUYER_ROLES = ['TREASURE HUNTER', 'DEEP DIGGER', 'CAREFUL MINER', 'CHAOS MINER', 'PUZZLE HUNTER', 'COLLECTOR', 'SOL SEEKER']
@@ -367,7 +388,7 @@ export function spawnBuyer(state, g, event) {
   if (tier.id === 'exceptional') {
     state.event = { name: 'Drill Frenzy', phase: 'active', remaining: 18 }
     state.community.event = 'Drill Frenzy'
-    state.major = { title: 'LARGEST BUY OF THE SESSION', subtitle: `${miner.name} powered up the whole shaft · community drill frenzy`, sourceLabel: source, color: '#d4b3ff', minerId: miner.id, id: String(state.time) + ':largest-buy' }
+    state.major = { title: 'LARGEST BUY OF THE SESSION', subtitle: `${miner.name} powered up the whole shaft · community drill frenzy`, sourceLabel: source, color: '#d4b3ff', minerId: miner.id, id: String(state.time) + ':largest-buy', expires: state.time + 6 }
   }
   return miner
 }
@@ -681,6 +702,15 @@ function tickActivity(state, g) {
   state.activity.nextDemo = state.time + 15 + nextRandom(state) * 18
 }
 
+function advanceAnnouncements(state) {
+  if (state.major?.expires != null && state.time >= state.major.expires) state.major = null
+  if (state.noticeCurrent && state.time >= state.noticeCurrent.expires) {
+    state.noticeCurrent = state.noticeQueue.shift() || null
+    state.ticker = state.noticeCurrent?.message || 'The crew is moving through the local mine.'
+    state.tickerClock = 0
+  }
+}
+
 export function tickCrew(state, g, dt) {
   if (!state || !g || !Number.isFinite(dt) || dt <= 0) return state
   state.time += Math.min(dt, .1)
@@ -696,6 +726,7 @@ export function tickCrew(state, g, dt) {
   updateEvent(state, dt)
   tickActivity(state, g)
   updatePuzzle(state, g, dt)
+  advanceAnnouncements(state)
   for (const miner of state.miners) {
     miner.lastActive = state.time
     if (miner.spawnUntil > state.time) {
@@ -739,7 +770,7 @@ export function tickCrew(state, g, dt) {
       else moveMiner(state, g, miner, simDt)
     }
   }
-  if (state.tickerClock > 6) {
+  if (!state.noticeCurrent && state.tickerClock > 6) {
     const active = state.miners[Math.floor(nextRandom(state) * state.miners.length)]
     state.ticker = active.name + ' ' + active.goal.toLowerCase()
     state.tickerIndex++

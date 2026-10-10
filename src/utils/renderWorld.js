@@ -32,12 +32,19 @@ function sprites() {
 }
 export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, crew = null) {
   ctx.imageSmoothingEnabled = false
-  const p = g.player, followed = crew?.followId && crew.miners?.find(miner => miner.id === crew.followId), focus = followed || p, palette = palettes[zoneAt(focus.y)], targetX = Math.max(0, Math.min(WIDTH * TILE - width, (focus.x + .325) * TILE - width * .43 + (focus.facing || 1) * 22 + (followed ? 0 : inspect))), targetY = Math.max(0, Math.min(HEIGHT * TILE - height, focus.y * TILE - height * .43))
-  camera.x += (targetX - camera.x) * (settings.reduced ? 1 : .12); camera.y += (targetY - camera.y) * (settings.reduced ? 1 : .14)
+  const zoom = camera.zoom || 1
+  const visibleWidth = width / zoom, visibleHeight = height / zoom
+  const p = g.player, followed = crew?.followId && crew.miners?.find(miner => miner.id === crew.followId), focus = followed || p, palette = palettes[zoneAt(focus.y)], targetX = Math.max(0, Math.min(WIDTH * TILE - visibleWidth, (focus.x + .325) * TILE - visibleWidth * .43 + (focus.facing || 1) * 22 + (followed ? 0 : inspect))), targetY = Math.max(0, Math.min(HEIGHT * TILE - visibleHeight, focus.y * TILE - visibleHeight * .43))
+  if ((camera.manualUntil || 0) <= g.time) {
+    camera.x += (targetX - camera.x) * (settings.reduced ? 1 : .12); camera.y += (targetY - camera.y) * (settings.reduced ? 1 : .14)
+  } else {
+    camera.x = Math.max(0, Math.min(WIDTH * TILE - visibleWidth, camera.x)); camera.y = Math.max(0, Math.min(HEIGHT * TILE - visibleHeight, camera.y))
+  }
   const bump = settings.shake && !settings.reduced && g.shake > 0 ? (Math.floor(g.time * 70) % 2 ? 1 : -1) * (g.shake > .1 ? 3 : 1) : 0
   camera.drawX = Math.round(camera.x) + bump; camera.drawY = Math.round(camera.y)
   const cx = camera.drawX, cy = camera.drawY
   ctx.fillStyle = '#111311'; ctx.fillRect(0, 0, width, height)
+  ctx.save(); ctx.translate(Math.round(width / 2), Math.round(height / 2)); ctx.scale(zoom, zoom); ctx.translate(-Math.round(width / 2), -Math.round(height / 2))
   const rect = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(Math.round(x - cx), Math.round(y - cy), w, h) }
   const text = (s, x, y, color = '#ac9a76') => { ctx.font = '7px monospace'; ctx.fillStyle = color; ctx.fillText(s, Math.round(x - cx), Math.round(y - cy)) }
   for (let y = Math.max(0, Math.floor(cy / TILE)); y <= Math.min(HEIGHT - 1, Math.ceil((cy + height) / TILE)); y++) for (let x = Math.max(0, Math.floor(cx / TILE)); x <= Math.min(WIDTH - 1, Math.ceil((cx + width) / TILE)); x++) {
@@ -94,7 +101,7 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
     rect(x - radius, y, radius * 2, 1, '#f5d984'); rect(x, y - radius, 1, radius * 2, '#c3a4ed')
     if (burst.level > 1) { rect(x - radius, y - radius, 1, 4, '#f5d984'); rect(x + radius, y + radius - 4, 1, 4, '#c3a4ed') }
   }
-  drawCrew(ctx, crew, cx, cy, width, height, g.time, settings.reduced)
+  drawCrew(ctx, crew, cx, cy, visibleWidth, visibleHeight, g.time, settings.reduced)
   let frame = ({ idle: 0, starting: 1, stopping: 2, turning: 3, jumping: 6, falling: 7, landing: 9, crouching: 9, 'dig-side': 10, 'dig-up': 11, 'dig-down': 12, climbing: 14, celebrating: 15, tired: 16, carrying: 17, damage: 18, pushing: 19 })[p.state] ?? 0
   if (p.state === 'walking') frame = 1 + Math.floor(g.time * 12) % 4
   if (p.state.startsWith('dig') && Math.floor(g.time * 12) % 2) frame = 13
@@ -137,6 +144,7 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
     if (g.target.y > pos.y && Math.abs(g.target.x - pos.x) < 2) text(info.locked ? '! UNSAFE' : 'SAFE DROP', x - 12, y + 25, color)
   }
   if (g.escapeUntil > g.time) text('! MOVE AWAY !', p.x * 16 - 25, p.y * 16 - 26, '#ffb87b')
+  ctx.restore()
 }
 
 function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
