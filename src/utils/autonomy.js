@@ -1,3 +1,4 @@
+import { awardSOL, rewardAmount } from './sol.js'
 import { hash, keyOf, playerTile, solid, tile, WIDTH, HEIGHT } from './world.js'
 
 export const AUTONOMY_KEY = 'dig-fun-autonomy-v1'
@@ -54,6 +55,7 @@ function makeMiner(profile, index) {
     state: 'idle',
     speech: choice(SPEECH[profile.role] || SPEECH.COLLECTOR, index),
     speechUntil: 5 + index,
+    status: 'Scanning for clues.',
     goal: 'Scanning nearby tiles.',
     target: null,
     targetType: null,
@@ -89,7 +91,8 @@ export function createAutonomy(now = Date.now()) {
     event: null,
     nextEvent: 18,
     mute: false,
-    auto: { enabled: false, strategy: 'follow-sparkles', target: null, decision: 'Scanning nearby tiles.', distance: 0, confidence: 73 },
+    crewIntroduced: false,
+    auto: { enabled: true, strategy: 'follow-sparkles', target: null, suggestion: null, status: 'Inspecting the surrounding blocks.', decision: 'Inspecting the surrounding blocks.', distance: 0, confidence: 73 },
     puzzle: null,
     records: {},
     offline: null,
@@ -108,10 +111,12 @@ export function restoreAutonomy(value, now = Date.now()) {
   fresh.ticker = typeof value.ticker === 'string' ? value.ticker.slice(0, 140) : fresh.ticker
   fresh.feed = Array.isArray(value.feed) ? value.feed.filter(item => typeof item === 'string').slice(0, 30) : fresh.feed
   fresh.mute = value.mute === true
+  fresh.crewIntroduced = value.crewIntroduced === true
   if (value.auto && typeof value.auto === 'object') {
     fresh.auto.strategy = Object.hasOwn(AUTO_STRATEGIES, value.auto.strategy) ? value.auto.strategy : fresh.auto.strategy
-    fresh.auto.enabled = value.auto.enabled === true
+    fresh.auto.enabled = true
     fresh.auto.decision = typeof value.auto.decision === 'string' ? value.auto.decision.slice(0, 80) : fresh.auto.decision
+    fresh.auto.status = typeof value.auto.status === 'string' ? value.auto.status.slice(0, 48) : fresh.auto.status
     fresh.auto.confidence = integer(value.auto.confidence, 73, 0, 100)
   }
   fresh.miners = fresh.miners.map((miner) => {
@@ -149,7 +154,8 @@ export function serializeAutonomy(state) {
     ticker: state.ticker,
     feed: state.feed.slice(0, 30),
     mute: state.mute,
-    auto: { enabled: state.auto.enabled, strategy: state.auto.strategy, decision: state.auto.decision, confidence: state.auto.confidence },
+    crewIntroduced: state.crewIntroduced,
+    auto: { enabled: true, strategy: state.auto.strategy, status: state.auto.status, decision: state.auto.decision, confidence: state.auto.confidence },
     miners: state.miners.map(miner => ({ id: miner.id, x: miner.x, y: miner.y, facing: miner.facing, state: miner.state, speech: miner.speech, goal: miner.goal, blocks: miner.blocks, deepest: miner.deepest, puzzles: miner.puzzles, explosions: miner.explosions, lavaIncidents: miner.lavaIncidents, emptyChests: miner.emptyChests, streak: miner.streak, haul: miner.haul })),
   }
 }
@@ -173,11 +179,23 @@ function clearTarget(miner) {
   miner.mineProgress = 0
 }
 
-function candidateScore(type, x, y, miner, state, g) {
+function setAutoStatus(auto, status) {
+  auto.status = status
+  auto.decision = status
+}
+
+function clueDetected(g, x, y, p) {
+  const distance = Math.hypot(x - p.x, y - p.y)
+  if (distance > 4.5) return false
+  const n = hash(x, y)
+  return g.scanner > 0 || (g.time + n / 500) % 9 < .2 || n % 13 === 0
+}
+
+function candidateScore(type, x, y, miner, state, g, p) {
   const distance = Math.hypot(x - miner.x, y - miner.y)
   const depth = y - miner.y
   const nearbyLava = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([a, b]) => tile(g, a, b) === 'lava')
-  let score = -distance * 2 + (VALUE[type] || 0) * .2
+  let score = -distance * 2 + (clueDetected(g, x, y, p) ? (VALUE[type] || 0) * 2 : type === 'stone' || type === 'hard' ? 0 : -VALUE[type] * 1.5)
   if (miner.role === 'DEEP DIGGER') score += depth * 9
   if (miner.role === 'TREASURE HUNTER') score += ['gold', 'diamond', 'copper'].includes(type) ? 38 : 0
   if (miner.role === 'SOL SEEKER') score += type === 'sol' ? 160 : type === 'diamond' ? 60 : 0
@@ -197,7 +215,7 @@ function chooseTarget(state, g, miner) {
     if (!solid(type) || ['bedrock', 'debris'].includes(type)) continue
     const distance = Math.abs(x - origin.x) + Math.abs(y - origin.y)
     if (!distance || distance > 8) continue
-    const score = candidateScore(type, x, y, miner, state, g)
+    const score = candidateScore(type, x, y, miner, state, g, miner)
     if (!best || score > best.score) best = { x, y, type, score }
   }
   if (!best) return null
@@ -205,6 +223,7 @@ function chooseTarget(state, g, miner) {
   miner.targetType = best.type
   miner.mineProgress = 0
   miner.goal = best.type === 'casing' || best.type === 'sealed' ? 'Inspecting a sealed chamber.' : best.type === 'sol' ? 'Chasing a SOL crystal.' : 'Investigating ' + best.type + ' signal.'
+  miner.status = best.type === 'casing' || best.type === 'sealed' ? 'Entering chamber' : best.type === 'sol' ? 'Following a SOL signal' : best.type === 'diamond' ? 'Following a diamond signal' : 'Walking to target'
   if (best.type === 'gold' || best.type === 'diamond' || best.type === 'sol') speak(miner, choice(SPEECH[miner.role] || SPEECH.COLLECTOR, Math.floor(state.time + miner.index)), state)
   return best
 }
@@ -227,6 +246,7 @@ function moveMiner(state, g, miner, dt) {
       miner.x = next
       miner.facing = direction
       miner.state = 'walking'
+      miner.status = 'Walking to target'
       return
     }
     clearTarget(miner)
@@ -239,12 +259,14 @@ function moveMiner(state, g, miner, dt) {
     if (isOpen(g, miner.x + .35, next + .45)) {
       miner.y = next
       miner.state = 'climbing'
+      miner.status = 'Searching for a deeper route'
       return
     }
     clearTarget(miner)
     return
   }
   miner.state = 'mining'
+  miner.status = type === 'casing' || type === 'sealed' ? 'Entering chamber' : type === 'lava' ? 'Avoiding lava' : 'Mining stone'
 }
 
 function discovery(state, g, miner, type) {
@@ -257,7 +279,38 @@ function discovery(state, g, miner, type) {
   if (type === 'diamond' || type === 'sol') announce(state, miner.name + ' found a ' + label + ' at ' + Math.round(miner.y * 10) + 'm.', { title: 'RAREST DISCOVERY', subtitle: (type === 'sol' ? 'Prismatic SOL crystal' : 'Diamond cache') + ' · found by ' + miner.name, color: type === 'sol' ? '#c88cff' : '#73ecf0', minerId: miner.id })
   else if (type === 'gold') announce(state, miner.name + ' cracked ' + miner.haul.gold + ' gold at ' + Math.round(miner.y * 10) + 'm.')
   else if (state.tickerClock > 3) announce(state, miner.name + ' collected ' + miner.haul[type] + ' ' + type + '.')
+  miner.status = 'Collecting ' + type
   speak(miner, type === 'sol' ? 'I found the impossible rock.' : type.toUpperCase() + ' exposed. Keep digging.', state, 5)
+}
+
+export function startPuzzle(state, g, minerId = 'player', artifactId = null) {
+  if (state.puzzle && !state.puzzle.done) return false
+  const miner = state.miners.find(item => item.id === minerId)
+  const difficulty = 6 + (hash(Math.floor((miner?.x || g.player.x) * 10), Math.floor((miner?.y || g.player.y) * 10)) % 7)
+  state.puzzle = {
+    id: minerId + '-' + Math.floor(state.time),
+    minerId,
+    artifactId,
+    title: 'THE UNBLINKING DOOR',
+    kind: 'rune-pairs',
+    progress: 0,
+    duration: difficulty,
+    mode: 'auto',
+    clue: null,
+    message: 'Reading ancient symbols',
+    done: false,
+    result: null,
+  }
+  if (miner) {
+    miner.goal = 'Solving the sealed chamber.'
+    miner.status = 'Solving puzzle'
+    speak(miner, 'Puzzle chamber detected.', state, 6)
+  } else {
+    state.auto.status = 'Solving puzzle'
+    state.auto.decision = state.auto.status
+  }
+  announce(state, (miner?.name || 'YOU') + ' entered a puzzle chamber.')
+  return true
 }
 
 function workMiner(state, g, miner, dt) {
@@ -270,10 +323,7 @@ function workMiner(state, g, miner, dt) {
   miner.state = 'mining'
   if (type === 'casing' || type === 'sealed') {
     if (miner.mineProgress > 1.6 && !state.puzzle) {
-      state.puzzle = { id: miner.id + '-' + Math.floor(state.time), minerId: miner.id, title: 'THE UNBLINKING DOOR', kind: 'rune-pairs', progress: 0, mode: 'waiting', clue: null, done: false, result: null }
-      miner.goal = 'Waiting on the crew puzzle.'
-      speak(miner, 'Puzzle chamber detected.', state, 6)
-      announce(state, miner.name + ' opened a puzzle chamber. Choose how the crew responds.')
+      startPuzzle(state, g, miner.id)
       clearTarget(miner)
     }
     return
@@ -300,10 +350,24 @@ function workMiner(state, g, miner, dt) {
 }
 
 function updatePuzzle(state, g, dt) {
-  if (!state.puzzle || state.puzzle.done || state.puzzle.mode !== 'auto') return
+  if (!state.puzzle) return
+  if (state.puzzle.done) {
+    if (state.time - (state.puzzle.doneAt || state.time) > 2.8) state.puzzle = null
+    return
+  }
   const miner = state.miners.find(item => item.id === state.puzzle.minerId)
-  state.puzzle.progress = Math.min(100, state.puzzle.progress + dt * (5 + (miner?.puzzles || 0) * .25))
-  if (miner && Math.floor(state.time) % 4 === 0) speak(miner, state.puzzle.progress < 50 ? 'Trying the obvious answer.' : 'Recalculating.', state, 2)
+  const rate = 100 / Math.max(4, Math.min(12, state.puzzle.duration || 8)) * (1 + (miner?.puzzles || 0) * .03)
+  state.puzzle.progress = Math.min(100, state.puzzle.progress + dt * rate)
+  const step = Math.floor(state.puzzle.progress / 25)
+  const messages = ['Reading ancient symbols', 'Testing the mechanism', 'Matching crystal signals', 'Trying another sequence']
+  state.puzzle.message = messages[Math.min(3, step)]
+  if (miner) {
+    miner.status = state.puzzle.message
+    if (Math.floor(state.time) % 3 === 0) speak(miner, step > 1 ? 'Recalculating.' : 'Trying the obvious answer.', state, 1.5)
+  } else {
+    state.auto.status = state.puzzle.message
+    state.auto.decision = state.auto.status
+  }
   if (state.puzzle.progress >= 100) finishPuzzle(state, g, 'auto')
 }
 
@@ -313,7 +377,7 @@ export function finishPuzzle(state, g, mode = 'manual') {
   if (mode === 'assist') {
     state.puzzle.clue = 'The brightest rune is lying. Start with the dim one.'
     state.puzzle.progress = Math.max(state.puzzle.progress, 35)
-    state.puzzle.mode = 'waiting'
+    state.puzzle.mode = 'auto'
     return true
   }
   if (mode === 'auto' && state.puzzle.mode !== 'auto') {
@@ -322,14 +386,24 @@ export function finishPuzzle(state, g, mode = 'manual') {
     return true
   }
   state.puzzle.done = true
+  state.puzzle.doneAt = state.time
   state.puzzle.progress = 100
   state.puzzle.result = mode === 'manual' ? 'Rare ore cache · crew confidence +1' : 'Map fragment · puzzle skill increased'
   if (miner) {
     miner.puzzles++
     miner.streak++
     speak(miner, 'Puzzle solution found.', state, 6)
+    miner.status = 'Opening artifact'
+  } else {
+    const artifact = state.puzzle.artifactId && g.artifacts.find(item => item.id === state.puzzle.artifactId)
+    if (artifact && !artifact.solved) {
+      artifact.solved = true
+      awardSOL(g, `puzzle:${artifact.id}`, rewardAmount('puzzle', artifact.id), 'ANCIENT SEAL')
+    }
+    state.auto.status = 'Opening artifact'
+    state.auto.decision = state.auto.status
   }
-  announce(state, (miner?.name || 'The crew') + ' solved THE UNBLINKING DOOR.', { title: 'FIRST CREW ARTIFACT', subtitle: 'The Unblinking Coin · local discovery', color: '#d9bd67', minerId: miner?.id })
+  announce(state, (miner?.name || 'YOU') + ' solved THE UNBLINKING DOOR.', { title: miner ? 'FIRST CREW ARTIFACT' : 'PUZZLE SOLVED', subtitle: miner ? 'The Unblinking Coin · local discovery' : 'Ancient seal opened · local discovery', color: '#d9bd67', minerId: miner?.id || 'player' })
   g.shake = Math.max(g.shake || 0, .28)
   return true
 }
@@ -354,9 +428,17 @@ export function tickCrew(state, g, dt) {
   if (!state || !g || !Number.isFinite(dt) || dt <= 0) return state
   state.time += Math.min(dt, .1)
   state.tickerClock += dt
+  if (!state.crewIntroduced && g.broken > 0) {
+    state.crewIntroduced = true
+    announce(state, 'The first block cracked. Rival crews are entering the shaft.')
+  }
   updateEvent(state, dt)
   updatePuzzle(state, g, dt)
   for (const miner of state.miners) {
+    if (state.puzzle?.minerId === miner.id && !state.puzzle.done) {
+      miner.state = 'inspecting'
+      continue
+    }
     miner.think -= dt
     miner.deepest = Math.max(miner.deepest, Math.max(0, (miner.y - 8) * 10))
     if (state.time > miner.speechUntil && miner.think <= 0) {
@@ -409,50 +491,118 @@ export function computeRecords(state, g) {
   return state.records
 }
 
-function pickAutoTarget(g, strategy, auto) {
+function routeToBlock(g, start, target) {
+  const queue = [{ x: start.x, y: start.y, path: [] }]
+  const visited = new Set([keyOf(start.x, start.y)])
+  while (queue.length) {
+    const current = queue.shift()
+    if (Math.abs(current.x - target.x) + Math.abs(current.y - target.y) === 1) return [...current.path, { x: current.x, y: current.y }]
+    if (current.path.length >= 12) continue
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = current.x + dx, y = current.y + dy, id = keyOf(x, y)
+      if (x < 1 || y < 1 || x >= WIDTH - 1 || y >= HEIGHT - 1 || visited.has(id) || solid(tile(g, x, y))) continue
+      visited.add(id)
+      queue.push({ x, y, path: [...current.path, { x: current.x, y: current.y }] })
+    }
+  }
+  return null
+}
+
+function targetLabel(type, clue) {
+  if (type === 'sol') return clue ? 'Following a SOL signal' : 'Searching for ore'
+  if (type === 'diamond') return clue ? 'Following a diamond signal' : 'Searching for ore'
+  if (type === 'gold') return clue ? 'Following a gold signal' : 'Searching for ore'
+  if (type === 'silver') return clue ? 'Following a silver signal' : 'Searching for ore'
+  if (type === 'copper') return clue ? 'Following a copper signal' : 'Searching for ore'
+  if (type === 'casing' || type === 'sealed') return 'Entering chamber'
+  return 'Searching for a deeper route'
+}
+
+function pickAutoTarget(g, auto) {
   const p = playerTile(g)
+  if (g.broken === 0) {
+    const first = { x: p.x, y: p.y + 1, type: tile(g, p.x, p.y + 1), score: 1000, distance: 1, clue: false }
+    if (solid(first.type) && g.seen[keyOf(first.x, first.y)]) {
+      auto.target = { x: first.x, y: first.y }
+      auto.distance = 1
+      auto.confidence = 96
+      setAutoStatus(auto, 'Mining stone')
+      return first
+    }
+  }
   const candidates = []
-  for (let y = Math.max(2, p.y - 3); y <= Math.min(HEIGHT - 2, p.y + 5); y++) for (let x = Math.max(1, p.x - 7); x <= Math.min(WIDTH - 2, p.x + 7); x++) {
+  for (let y = Math.max(2, p.y - 3); y <= Math.min(HEIGHT - 2, p.y + 7); y++) for (let x = Math.max(1, p.x - 7); x <= Math.min(WIDTH - 2, p.x + 7); x++) {
     const type = tile(g, x, y)
     if (!solid(type) || ['bedrock', 'debris'].includes(type) || !g.seen[keyOf(x, y)]) continue
-    const distance = Math.abs(x - p.x) + Math.abs(y - p.y)
+    if (type === 'sealed' && !g.artifacts.some(artifact => artifact.solved)) continue
+    const route = routeToBlock(g, p, { x, y })
+    if (!route) continue
+    const distance = route.length + Math.abs(x - p.x) + Math.abs(y - p.y) * .25
+    const clue = clueDetected(g, x, y, p) || type === 'casing' || type === 'sealed'
     const nearbyLava = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([a, b]) => tile(g, a, b) === 'lava')
-    let score = -distance
-    if (strategy === 'go-deep') score += y * 12 - Math.abs(x - p.x) * 2
-    if (strategy === 'find-value') score += (VALUE[type] || 0) * 5
-    if (strategy === 'follow-sparkles') score += (VALUE[type] || 0) * 2 + (hash(x, y) % 11 === 0 ? 30 : 0)
-    if (strategy === 'find-puzzles') score += ['casing', 'sealed'].includes(type) ? 160 : 0
-    if (strategy === 'safe-mode') score += nearbyLava || type === 'lava' ? -250 : 12
-    if (strategy === 'chaos-mode') score += (hash(x + Math.floor(g.time), y) % 31) + (type === 'lava' ? 20 : 0)
-    candidates.push({ x, y, type, score, distance })
+    const rarePriority = { sol: 1000, diamond: 850, casing: 740, sealed: 650, gold: 520, silver: 330, copper: 180 }[type] || 0
+    let score = -distance * 8 + (y - p.y) * 2
+    if (rarePriority && clue) score += rarePriority
+    if (rarePriority && !clue) score -= rarePriority * .65
+    if (type === 'stone' || type === 'hard' || type === 'soil' || type === 'loose') score += y * 3
+    if (nearbyLava) score -= 700
+    const suggestion = auto.suggestion
+    if (suggestion && g.time <= suggestion.until && Math.hypot(x - suggestion.x, y - suggestion.y) <= 2.5 && !nearbyLava) score += 280
+    candidates.push({ x, y, type, score, distance, clue })
   }
   candidates.sort((a, b) => b.score - a.score)
-  const next = candidates[0] || { x: p.x, y: p.y + 1, type: 'stone', score: 0, distance: 1 }
+  const next = candidates[0] || { x: p.x, y: p.y + 1, type: tile(g, p.x, p.y + 1), score: 0, distance: 1, clue: false }
   auto.target = { x: next.x, y: next.y }
-  auto.distance = next.distance
-  auto.confidence = Math.max(42, Math.min(96, 64 + Math.round(next.score % 28)))
-  auto.decision = next.type === 'casing' || next.type === 'sealed' ? 'Puzzle chamber' : next.type === 'stone' || next.type === 'hard' ? 'Solid route' : next.type[0].toUpperCase() + next.type.slice(1) + ' signal'
+  auto.distance = Math.max(0, Math.round(next.distance))
+  auto.confidence = Math.max(42, Math.min(96, 64 + Math.round(Math.abs(next.score) % 28)))
+  setAutoStatus(auto, targetLabel(next.type, next.clue))
+  if (auto.suggestion && g.time > auto.suggestion.until) auto.suggestion = null
   return next
 }
 
 export function autoDecision(g, auto, dt = 0) {
-  if (!auto.enabled) return { input: {}, target: auto.target, decision: auto.decision, distance: auto.distance, confidence: auto.confidence }
-  const strategy = Object.hasOwn(AUTO_STRATEGIES, auto.strategy) ? auto.strategy : 'follow-sparkles'
+  auto.enabled = true
   const p = playerTile(g)
   const current = auto.target
-  if (!current || !solid(tile(g, current.x, current.y)) || Math.abs(current.x - p.x) + Math.abs(current.y - p.y) > 10) pickAutoTarget(g, strategy, auto)
+  if (!current || !solid(tile(g, current.x, current.y)) || Math.abs(current.x - p.x) + Math.abs(current.y - p.y) > 12 || !g.seen[keyOf(current.x, current.y)]) pickAutoTarget(g, auto)
   const target = auto.target
-  if (!target) return { input: {}, target: null, decision: 'Waiting for a reachable tile.', distance: 0, confidence: 0 }
-  const dx = target.x - p.x
-  const dy = target.y - p.y
+  if (!target) {
+    setAutoStatus(auto, 'Searching for ore')
+    return { input: {}, target: null, interact: false, decision: auto.status, distance: 0, confidence: 0 }
+  }
+  const type = tile(g, target.x, target.y), dx = target.x - p.x, dy = target.y - p.y
+  const distance = Math.abs(dx) + Math.abs(dy)
   const input = {}
-  if (Math.abs(dx) > 1) input[dx > 0 ? 'right' : 'left'] = true
-  else if (dy > 0 && Math.abs(dx) === 0) input.digDown = true
-  else if (Math.abs(dx) + Math.abs(dy) <= 1) input.mine = true
-  else if (dy < 0) input.jump = true
-  auto.distance = Math.abs(dx) + Math.abs(dy)
-  if (dt > 0 && g.time % 2 < dt && strategy === 'go-deep') auto.decision = 'Choosing the fastest drop.'
-  return { input, target, decision: auto.decision, distance: auto.distance, confidence: auto.confidence }
+  let interact = false
+  const route = routeToBlock(g, p, target)
+  const next = route?.[1] || route?.[0]
+  if (type === 'casing' && distance <= 1) {
+    interact = true
+    setAutoStatus(auto, 'Entering chamber')
+  } else if (distance <= 1) {
+    input[dy > 0 && dx === 0 ? 'digDown' : 'mine'] = true
+    setAutoStatus(auto, targetLabel(type, clueDetected(g, target.x, target.y, p)) === 'Searching for a deeper route' ? 'Mining stone' : 'Investigating sparkle')
+  } else if (next && next.x !== p.x) {
+    input[next.x > p.x ? 'right' : 'left'] = true
+    setAutoStatus(auto, 'Walking to target')
+  } else if (next && next.y > p.y) {
+    input.down = true
+    setAutoStatus(auto, 'Searching for a deeper route')
+  } else if (next && next.y < p.y) {
+    const onLadder = tile(g, p.x, p.y) === 'ladder' || tile(g, p.x, p.y + 1) === 'ladder'
+    if (onLadder) input.up = true
+    else if (g.player.grounded) { input.jump = true; input.jumpPressed = true }
+    setAutoStatus(auto, onLadder ? 'Walking to target' : 'Searching for a deeper route')
+  } else if (dy > 0 && dx === 0) {
+    input.digDown = true
+    setAutoStatus(auto, 'Mining stone')
+  } else {
+    input[dx > 0 ? 'right' : 'left'] = true
+    setAutoStatus(auto, 'Walking to target')
+  }
+  auto.distance = distance
+  auto.decision = auto.status
+  return { input, target, interact, decision: auto.status, distance, confidence: auto.confidence }
 }
 
 export function applyOfflineProgress(state, g, now = Date.now()) {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, tickCrew } from '../src/utils/autonomy.js'
-import { createGame, reveal } from '../src/utils/world.js'
+import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, startPuzzle, tickCrew } from '../src/utils/autonomy.js'
+import { createGame, DEFAULT_SETTINGS, reveal, step } from '../src/utils/world.js'
 
 test('autonomy creates eight named simulated miners and survives a safe round trip', () => {
   const state = createAutonomy(100)
@@ -11,6 +11,21 @@ test('autonomy creates eight named simulated miners and survives a safe round tr
   assert.equal(restored.miners.length, 8)
   assert.equal(restored.miners[0].name, 'Drillbit Dan')
   assert.equal(restored.auto.strategy, 'follow-sparkles')
+  assert.equal(restored.auto.enabled, true)
+})
+
+test('the player loop starts mining immediately and introduces the crew after the first break', () => {
+  const g = createGame()
+  const state = createAutonomy(0)
+  reveal(g)
+  for (let i = 0; i < 180; i++) {
+    const decision = autoDecision(g, state.auto, 1 / 60)
+    if (decision.target) g.target = decision.target
+    step(g, decision.input, 1 / 60, DEFAULT_SETTINGS)
+    tickCrew(state, g, 1 / 60)
+  }
+  assert.ok(g.broken > 0)
+  assert.equal(state.crewIntroduced, true)
 })
 
 test('auto decisions stay within revealed mine tiles and expose the selected strategy', () => {
@@ -54,4 +69,15 @@ test('puzzle assist gives a clue and solve modes complete the chamber', () => {
   assert.equal(autoState.puzzle.done, false)
   for (let i = 0; i < 700; i++) tickCrew(autoState, g, 1 / 30)
   assert.equal(autoState.puzzle.done, true)
+})
+
+test('player puzzle solving is timed and marks the local artifact solved', () => {
+  const state = createAutonomy(0)
+  const g = createGame()
+  g.artifacts.push({ id: '26,26', outcome: 'puzzle', solved: false, dials: [0, 0, 0] })
+  assert.equal(startPuzzle(state, g, 'player', '26,26'), true)
+  assert.ok(state.puzzle.duration >= 6 && state.puzzle.duration <= 12)
+  for (let i = 0; i < 900 && !state.puzzle.done; i++) tickCrew(state, g, 1 / 60)
+  assert.equal(state.puzzle.done, true)
+  assert.equal(g.artifacts[0].solved, true)
 })

@@ -135,9 +135,9 @@ export function drawWorld(ctx, g, camera, width, height, settings, inspect = 0, 
 }
 
 function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
-  if (!crew?.miners) return
+  if (!crew?.miners || crew.crewIntroduced === false) return
   const visible = [...crew.miners].sort((a, b) => Math.hypot(a.x - cx / 16, a.y - cy / 16) - Math.hypot(b.x - cx / 16, b.y - cy / 16))
-  for (const [index, miner] of visible.entries()) {
+  for (const miner of visible) {
     const mx = Math.round((miner.x + .325) * 16 - cx), my = Math.round((miner.y + .9) * 16 - cy)
     if (mx < -30 || mx > width + 30 || my < -60 || my > height + 30) continue
     const bob = reduced ? 0 : miner.state === 'walking' ? Math.floor((time + miner.index) * 8) % 2 : 0
@@ -171,22 +171,5 @@ function drawCrew(ctx, crew, cx, cy, width, height, time, reduced) {
       ctx.fillRect(14, -9, 1, 1)
     }
     ctx.restore()
-    if (index < 4) {
-      const copy = miner.speech?.length > 30 ? miner.speech.slice(0, 29) + '…' : miner.speech || miner.goal
-      ctx.font = '6px monospace'
-      const bubbleWidth = Math.min(125, Math.max(70, ctx.measureText(copy).width + 12))
-      const bubbleX = Math.max(3, Math.min(width - bubbleWidth - 3, mx - bubbleWidth / 2))
-      const bubbleY = Math.max(3, my - 38 - (index % 2) * 14)
-      ctx.fillStyle = '#111914'
-      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY), Math.round(bubbleWidth), 17)
-      ctx.fillStyle = miner.color || '#d4c89e'
-      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY), Math.round(bubbleWidth), 1)
-      ctx.fillRect(Math.round(bubbleX), Math.round(bubbleY + 16), Math.round(bubbleWidth), 1)
-      ctx.fillStyle = '#d9d3b2'
-      ctx.fillText(copy, Math.round(bubbleX + 6), Math.round(bubbleY + 10))
-      ctx.fillStyle = miner.color || '#d4c89e'
-      ctx.font = '5px monospace'
-      ctx.fillText(miner.name.toUpperCase(), Math.round(bubbleX + 6), Math.round(bubbleY + 15))
-    }
   }
 }

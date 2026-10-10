@@ -3,12 +3,13 @@ import useModalFocus from './hooks/useModalFocus'
 import useMineSound from './hooks/useMineSound'
 import SolCounter from './components/SolCounter'
 import AutonomyOverlay from './components/AutonomyOverlay'
+import MinerNameplates from './components/MinerNameplates'
 import { formatSOL } from './utils/sol'
 import { WALLET_OPTIONS } from './utils/wallet'
 import { loadProgress } from './utils/storage'
 import { createGame, restore, serialize, SAVE_KEY, DEFAULT_KEYS, DEFAULT_SETTINGS, TOOLS, ORE_COLORS, SURFACE, TILE, ZONES, zoneAt, step, reveal, switchTool, interact, scan, say, promptFor, unlocked, keyOf, playerTile, tile, turnDial, returnToSurface, gameplayHint } from './utils/world'
 import { drawWorld } from './utils/renderWorld'
-import { AUTO_STRATEGIES, AUTONOMY_KEY, applyOfflineProgress, autoDecision, computeRecords, createAutonomy, finishPuzzle, restoreAutonomy, serializeAutonomy, tickCrew } from './utils/autonomy'
+import { AUTONOMY_KEY, applyOfflineProgress, autoDecision, computeRecords, createAutonomy, restoreAutonomy, serializeAutonomy, startPuzzle, tickCrew } from './utils/autonomy'
 
 const keyLabel = code => code.replace('Key', '').replace('Digit', '').replace('Arrow', '').replace('Left', 'LEFT').replace('Right', 'RIGHT').replace('Space', 'SPACE').replace('Escape', 'ESC')
 const shortTools = ['RUSTY', 'IRON', 'SILVER', 'GOLD', 'DIAMOND', 'LASER', 'SOL']
@@ -37,8 +38,8 @@ export default function App() {
   })
   const [settings, setSettings] = useState(loaded.settings)
   const [offlineSummary, setOfflineSummary] = useState(autonomy.offline)
-  const [panel, setPanel] = useState(null), [binding, setBinding] = useState(null), [status, setStatus] = useState(''), [legacy] = useState(loadProgress)
-  const [, refresh] = useState(0), canvas = useRef(null), view = useRef(null), input = useRef({}), camera = useRef({ x: 0, y: 0 }), inspect = useRef(0), gesture = useRef(null)
+  const [panel, setPanel] = useState(null), [binding, setBinding] = useState(null), [status, setStatus] = useState(''), [inspectedMiner, setInspectedMiner] = useState(null), [legacy] = useState(loadProgress)
+  const [, refresh] = useState(0), canvas = useRef(null), view = useRef(null), nameplates = useRef(null), input = useRef({}), camera = useRef({ x: 0, y: 0 }), inspect = useRef(0), gesture = useRef(null)
   const config = useRef(settings), panelRef = useRef(panel), savedError = useRef(false), runtime = useRef(null), autonomyRef = useRef(autonomy), autoRef = useRef(autonomy.auto)
   config.current = settings; panelRef.current = panel
   autonomyRef.current = autonomy
@@ -67,39 +68,11 @@ export default function App() {
   function refreshAutonomy() {
     setAutonomy({ ...autonomyRef.current, auto: { ...autonomyRef.current.auto } })
   }
-  function pauseAuto(reason = 'MANUAL CONTROL') {
-    if (!autonomyRef.current.auto.enabled) return
-    autonomyRef.current.auto.enabled = false
-    autonomyRef.current.auto.decision = reason
-    refreshAutonomy()
-  }
-  function toggleAuto() {
-    const next = !autonomyRef.current.auto.enabled
-    autonomyRef.current.auto.enabled = next
-    autonomyRef.current.auto.decision = next ? 'Scanning nearby tiles.' : 'Manual control ready.'
-    if (next) input.current = {}
-    refreshAutonomy()
-  }
-  function chooseStrategy(strategy) {
-    if (!Object.hasOwn(AUTO_STRATEGIES, strategy)) return
-    autonomyRef.current.auto.strategy = strategy
-    autonomyRef.current.auto.target = null
-    autonomyRef.current.auto.decision = AUTO_STRATEGIES[strategy].title
-    refreshAutonomy()
-  }
   function dismissMajor() {
     autonomyRef.current.major = null
     autonomyRef.current.offline = null
     setOfflineSummary(null)
     refreshAutonomy()
-  }
-  function solveCrewPuzzle(mode) {
-    if (mode === 'dismiss') {
-      autonomyRef.current.puzzle = null
-      refreshAutonomy()
-      return
-    }
-    if (finishPuzzle(autonomyRef.current, game.current, mode)) refreshAutonomy()
   }
   function reactToMajor(reaction) {
     autonomyRef.current.ticker = 'YOU: ' + reaction + ' · reaction recorded locally.'
@@ -108,10 +81,26 @@ export default function App() {
     refreshAutonomy()
   }
   function raceToMajor() {
-    chooseStrategy('follow-sparkles')
-    autonomyRef.current.auto.enabled = true
-    autonomyRef.current.auto.decision = 'Racing toward the crew discovery.'
+    const miner = autonomyRef.current.miners.find(item => item.id === autonomyRef.current.major?.minerId)
+    autonomyRef.current.auto.suggestion = miner ? { x: Math.floor(miner.x), y: Math.floor(miner.y), until: game.current.time + 12 } : null
+    autonomyRef.current.auto.status = 'Following a crew discovery'
+    autonomyRef.current.auto.decision = autonomyRef.current.auto.status
     dismissMajor()
+  }
+  function suggestTile(target) {
+    autonomyRef.current.auto.suggestion = { x: target.x, y: target.y, until: game.current.time + 8 }
+    autonomyRef.current.auto.target = null
+    autonomyRef.current.auto.status = 'Investigating sparkle'
+    autonomyRef.current.auto.decision = autonomyRef.current.auto.status
+    refreshAutonomy()
+  }
+  function inspectMiner(id) {
+    const miner = autonomyRef.current.miners.find(item => item.id === id)
+    if (!miner) return
+    setInspectedMiner(id)
+    autonomyRef.current.ticker = `${miner.name} is ${String(miner.status || miner.goal).toLowerCase()}.`
+    refreshAutonomy()
+    open('crew')
   }
   function open(name) { input.current = {}; setStatus(''); setPanel(name); setBinding(null); save() }
   const actions = useRef(null)
@@ -120,7 +109,6 @@ export default function App() {
     if (action === 'pause') { if (panelRef.current) closePanel(); else open('pause'); return }
     if (panelRef.current) return
     if (action === 'journal' || action === 'inventory') { open(action); return }
-    if (['next', 'previous', 'scanner', 'surface', 'interact'].includes(action)) pauseAuto('MANUAL CONTROL')
     if (action === 'next' || action === 'previous') switchTool(g, action === 'next' ? 1 : -1)
     if (action === 'scanner') scan(g)
     if (action === 'surface') { input.current = {}; gesture.current = null; inspect.current = 0; returnToSurface(g); camera.current = { x: 0, y: 0 }; save(); canvas.current?.focus() }
@@ -130,6 +118,8 @@ export default function App() {
   useEffect(() => {
     reveal(game.current)
     const element = canvas.current, container = view.current
+    const context = element.getContext('2d')
+    context.imageSmoothingEnabled = false
     let frame, last = performance.now(), lastUI = 0, lastSave = 0, scale = 3
     const resize = () => {
       scale = Math.max(1, Math.min(4, Math.floor(container.clientWidth / (container.clientWidth < 600 ? 160 : 400))))
@@ -152,7 +142,6 @@ export default function App() {
       if (!action) return
       e.preventDefault()
       if (['left', 'right', 'up', 'down', 'jump', 'mine'].includes(action)) {
-        pauseAuto('MANUAL CONTROL')
         input.current[action] = true
         if (action === 'jump') input.current.jumpPressed = true
         if (action === 'up' || action === 'down') {
@@ -173,13 +162,21 @@ export default function App() {
     const loop = now => {
       const dt = Math.min((now - last) / 1000, .035); last = now
       const g = game.current
-      if (!panelRef.current && !document.hidden) {
+      if (document.hidden) { frame = requestAnimationFrame(loop); return }
+      if (!panelRef.current) {
         const earnedBefore = g.sol.total
-        const decision = autoDecision(g, autoRef.current, dt)
-        if (autoRef.current.enabled) {
-          g.target = decision.target
-          step(g, decision.input, dt, config.current)
-        } else step(g, input.current, dt, config.current)
+        const puzzleBusy = autonomyRef.current.puzzle && !autonomyRef.current.puzzle.done
+        const decision = puzzleBusy ? { input: {}, target: g.target, interact: false } : autoDecision(g, autoRef.current, dt)
+        if (decision.interact) {
+          const before = g.artifacts.length
+          interact(g)
+          const artifact = g.artifacts.length > before ? g.artifacts[g.artifacts.length - 1] : null
+          if (artifact?.outcome === 'puzzle') startPuzzle(autonomyRef.current, g, 'player', artifact.id)
+        }
+        const manual = Object.fromEntries(Object.entries(input.current).filter(([, active]) => active))
+        const activeInput = puzzleBusy ? {} : { ...decision.input, ...manual }
+        if (decision.target) g.target = decision.target
+        step(g, activeInput, dt, config.current)
         if (g.sol.total !== earnedBefore) save()
         if (g.sound) { playRef.current(g.sound); g.sound = null }
         if (g.vibrate) { if (config.current.vibration && navigator.vibrate) navigator.vibrate(12); g.vibrate = false }
@@ -188,7 +185,8 @@ export default function App() {
         tickCrew(autonomyRef.current, g, dt)
         if (now - lastUI > 120) { computeRecords(autonomyRef.current, g); refreshAutonomy(); refresh(n => n + 1); lastUI = now }
       }
-      drawWorld(element.getContext('2d'), g, camera.current, element.width, element.height, config.current, inspect.current, autonomyRef.current)
+      drawWorld(context, g, camera.current, element.width, element.height, config.current, inspect.current, autonomyRef.current)
+      nameplates.current?.update({ game: g, autonomy: autoRef.current, camera: camera.current, canvas: element, container, scale })
       if (now - lastSave > 1500) { save(); saveAutonomy(); lastSave = now }
       frame = requestAnimationFrame(loop)
     }
@@ -201,12 +199,16 @@ export default function App() {
   function point(e) {
     const rect = canvas.current.getBoundingClientRect(), scale = runtime.current.scale
     const target = { x: Math.floor(((e.clientX - rect.left) / scale + camera.current.drawX) / TILE), y: Math.floor(((e.clientY - rect.top) / scale + camera.current.drawY) / TILE) }
-    if (game.current.seen[keyOf(target.x, target.y)]) { game.current.target = target; return true }
+    if (game.current.impact?.until > game.current.time && Math.hypot(target.x - game.current.impact.x, target.y - game.current.impact.y) <= 1) {
+      game.current.reactUntil = game.current.time + .6
+      say(game.current, 'Nice impact. The miner noticed your reaction.')
+      return true
+    }
+    if (game.current.seen[keyOf(target.x, target.y)]) { game.current.target = target; suggestTile(target); return true }
     say(game.current, 'Too far away. Move closer.'); return false
   }
   function pointerDown(e) {
     if (panel || e.button > 0) return
-    pauseAuto('MANUAL CONTROL')
     canvas.current.focus(); canvas.current.setPointerCapture(e.pointerId)
     if (e.pointerType === 'touch') gesture.current = { x: e.clientX, y: e.clientY, moved: false }
     else input.current.mine = point(e)
@@ -229,7 +231,7 @@ export default function App() {
     setSettings(s => ({ ...s, keys: { ...s.keys, [action]: e.code, ...(previous && previous !== action ? { [previous]: s.keys[action] } : {}) } })); setBinding(null); setStatus('Binding saved. Conflicting bindings are swapped.')
   }
   function touchButton(action, label, symbol, hold = false) {
-    return <button key={action} className={`touch-${action}`} aria-label={label} onContextMenu={e => e.preventDefault()} onPointerDown={e => { e.preventDefault(); if (['up', 'down', 'left', 'right', 'mine', 'jump', 'digDown'].includes(action)) pauseAuto('MANUAL CONTROL'); e.currentTarget.setPointerCapture(e.pointerId); if (hold) input.current[action] = true; else actions.current(action) }} onPointerUp={() => { input.current[action] = false }} onPointerCancel={() => { input.current[action] = false }} onLostPointerCapture={() => { input.current[action] = false }} onKeyDown={e => { if (hold && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); pauseAuto('MANUAL CONTROL'); input.current[action] = true } }} onKeyUp={e => { if (hold && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); input.current[action] = false } }} onBlur={() => { input.current[action] = false }}>{symbol}<small>{label}</small></button>
+    return <button key={action} className={`touch-${action}`} aria-label={label} onContextMenu={e => e.preventDefault()} onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); if (hold) input.current[action] = true; else actions.current(action) }} onPointerUp={() => { input.current[action] = false }} onPointerCancel={() => { input.current[action] = false }} onLostPointerCapture={() => { input.current[action] = false }} onKeyDown={e => { if (hold && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); input.current[action] = true } }} onKeyUp={e => { if (hold && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); input.current[action] = false } }} onBlur={() => { input.current[action] = false }}>{symbol}<small>{label}</small></button>
   }
   function exportSave() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(serialize(game.current, settings))], { type: 'application/json' })), a = document.createElement('a'); a.href = url; a.download = 'dig-fun-world.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -252,13 +254,14 @@ export default function App() {
     <section className="sol-hud" aria-label="In-game SOL rewards"><div className="sol-hud-tip"><strong>MINE ORE. EARN SOL.</strong><span>Copper, silver, gold & discoveries add rewards here →</span></div><SolCounter sol={g.sol} reduced={settings.reduced} onOpen={() => open('sol')} /></section>
     <div className="expedition-bar"><span><i /> {ZONES[zoneAt(g.player.y)]}</span><span>SECTOR {String(zoneAt(g.player.y) + 1).padStart(2, '0')} <span className="muted">/ 06</span></span></div>
     <section className="playfield" ref={view} id="game" aria-label="Mining expedition">
-      <AutonomyOverlay state={autonomy} offlineSummary={offlineSummary} onToggleAuto={toggleAuto} onStrategy={chooseStrategy} onDismissMajor={dismissMajor} onMute={() => { autonomyRef.current.mute = !autonomyRef.current.mute; refreshAutonomy() }} onPuzzle={solveCrewPuzzle} onReaction={reactToMajor} onRace={raceToMajor} />
-      <canvas ref={canvas} tabIndex={0} aria-label="Mining world. A D move, W S aim or climb, Space jump, X hold to mine, E interact. Rebind controls in Settings." onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={() => { input.current.mine = false }} onContextMenu={e => e.preventDefault()} />
+      <canvas className="pixel-art" ref={canvas} tabIndex={0} aria-label="Mining world. A D move, W S aim or climb, Space jump, X hold to mine, E interact. Rebind controls in Settings." onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={() => { input.current.mine = false }} onContextMenu={e => e.preventDefault()} />
+      <MinerNameplates ref={nameplates} miners={autonomy.miners} crewVisible={autonomy.crewIntroduced} onMinerClick={inspectMiner} />
+      <AutonomyOverlay state={autonomy} offlineSummary={offlineSummary} onDismissMajor={dismissMajor} onMute={() => { autonomyRef.current.mute = !autonomyRef.current.mute; refreshAutonomy() }} onReaction={reactToMajor} onRace={raceToMajor} />
       <div className="depth-counter"><span>DEPTH / METERS</span><strong>{depth.toFixed(1).padStart(5, '0')}<small>M</small></strong><div><i /> DEEPEST <b>{g.deepest.toFixed(1)} M</b></div></div>
-      <aside className="gameplay-hint"><small>MINER’S TIP</small><strong>{hint.title}</strong><p>{hint.text}</p><button onClick={() => open('help')}>FULL CONTROLS</button></aside>
+      {g.broken > 0 && <aside className="gameplay-hint"><small>MINER’S TIP</small><strong>{hint.title}</strong><p>{hint.text}</p><button onClick={() => open('help')}>FULL CONTROLS</button></aside>}
       <button className="surface-lift" onClick={() => actions.current('surface')} disabled={depth === 0} aria-label="Return to surface"><span>↑ SURFACE LIFT</span><small>{depth === 0 ? 'AT THE ENTRANCE' : 'FREE · KEEP YOUR SOL'}</small></button>
       <div className="interaction-prompt">{promptFor(g)}</div>
-      <div className="easy-controls">{touchButton('digDown', 'Hold to dig down', '↓', true)}<button onClick={() => open('help')}>HOW TO PLAY</button></div>
+      <div className="easy-controls">{g.broken > 0 ? <>{touchButton('digDown', 'Hold to dig down', '↓', true)}<button onClick={() => open('help')}>HOW TO PLAY</button></> : <span className="auto-start-label">MINER ACTIVE · INSPECTING THE WALL</span>}</div>
       <div className="notification" role="status" aria-live="polite">{g.noticeUntil > g.time ? g.notice : ''}</div>
       <div className="miner-readout"><span className="live-pixel" />{g.player.state.replaceAll('-', ' ').toUpperCase()}<span> {g.broken} BLOCKS</span></div>
       <button className={`scanner-button ${g.scanner ? 'scanning' : ''}`} onClick={() => actions.current('scanner')}><PixelIcon type="scan" /><span>MINERAL SCANNER<small>{g.time < g.scannerReady ? `RECHARGING ${Math.ceil(g.scannerReady - g.time)}S` : 'LOOK FOR A GLINT, NOT A GUARANTEE'}</small></span><kbd>{keyLabel(settings.keys.scanner)}</kbd></button>
@@ -279,6 +282,7 @@ export default function App() {
       {panel === 'help' && <><ol className="play-guide"><li><b>Break your first block.</b> Hold the DIG DOWN button. Release whenever you want to stop.</li><li><b>Pick a direction.</b> Use {keyLabel(settings.keys.left)} / {keyLabel(settings.keys.right)} or the arrow keys to walk. On a phone, hold the movement plates.</li><li><b>Explore sideways.</b> Hold a click on a neighboring block. On a phone, tap a block and hold Mine. Keyboard: aim with Up / Down and hold {keyLabel(settings.keys.mine)}.</li><li><b>Watch your SOL grow.</b> Soil and plain rock have no payout. Nearby copper, silver, gold, diamonds and crystals convert directly into in-game SOL. Your balance is always in the bright strip above the mine. Press {keyLabel(settings.keys.interact)} or Interact beside an artifact. Better tools unlock as you break blocks.</li><li><b>Come back up easily.</b> Tap SURFACE LIFT below the depth meter for an instant, free return to the entrance. Your SOL, discoveries and deepest record stay safe. Hold Up on a ladder to climb normally.</li></ol><p>Your miner only digs within reach. If the ground below is unsafe, explore another direction. Use {keyLabel(settings.keys.jump)} / Jump to get over gaps.</p><button className="primary" onClick={closePanel}>LET ME DIG</button></>}
       {panel === 'pause' && <><p>The mine can wait. Your discoveries are safe.</p><div className="menu-buttons"><button className="primary" onClick={closePanel}>BACK TO THE MINE</button><button onClick={() => open('help')}>HOW TO PLAY</button><button onClick={() => { closePanel(); input.current = {}; returnToSurface(g); camera.current = { x: 0, y: 0 }; save() }}>RETURN TO SURFACE · FREE</button><button onClick={() => open('reset')}>RESET GAME</button><button onClick={() => open('settings')}>SETTINGS & CONTROLS</button><button onClick={() => open('journal')}>ARTIFACT JOURNAL</button><button onClick={() => open('inventory')}>DISCOVERY LOG</button></div><p className="fine-print">Tools unlock as you break blocks. A / D or arrows to move; W / S to aim vertically or climb. Hold X to mine without a mouse. The ladder is to your left.</p></>}
       {panel === 'inventory' && <><p>Each collected deposit rewards SOL immediately. These are discovery records, not spendable items or currencies.</p><div className="ore-list">{Object.entries(ORE_COLORS).map(([ore, color]) => <div key={ore}><PixelIcon type="ore" color={color} /><span>{ore === 'sol' ? 'SOL CRYSTAL' : `${ore.toUpperCase()} ORE`}</span><strong>{g.inventory[ore] ? 'DISCOVERED' : 'UNKNOWN'}</strong></div>)}</div><p className="fine-print">SOL Crystals and all tools are fictional local game items.</p></>}
+      {panel === 'crew' && <><p>Simulated miners only. They are running in this browser, not on a server.</p>{autonomy.miners.map(miner => <article className={`crew-inspect ${inspectedMiner === miner.id ? 'is-selected' : ''}`} key={miner.id}><strong>{miner.name}</strong><small>{miner.role} · {miner.tool}</small><p>{miner.status || miner.goal}</p><div><span>{miner.blocks} BLOCKS</span><span>{Math.round(miner.deepest)}M DEEP</span><span>{miner.puzzles} PUZZLES</span><span>{miner.haul.gold + miner.haul.diamond + miner.haul.sol} RARE</span></div></article>)}<button onClick={closePanel}>BACK TO DIGGING</button></>}
       {panel === 'journal' && <><p>{g.artifacts.length} objects recovered · {g.deepest.toFixed(1)} m deepest descent.</p>{!g.artifacts.length && <div className="empty-note"><PixelIcon type="book" /><h2>THE PAGES ARE STILL EMPTY.</h2><p>Find an engraved casing. Approach it and press {keyLabel(settings.keys.interact)}. There’s one at the right edge of the entrance.</p></div>}{g.artifacts.map(a => <article className="field-entry" key={a.id}><small>OBJECT {a.id} / {a.outcome.toUpperCase()}</small><p>{artifactText[a.outcome]}</p>{a.outcome === 'puzzle' && <><p>Inscription: “First the tool, then the sun, then the way down.”</p><div className="puzzle-dials">{(a.dials || [0, 0, 0]).map((dial, index) => <button key={index} disabled={a.solved} aria-label={`Rotate mark ${index + 1}, currently ${['Ladder', 'Pickaxe', 'Sun'][dial]}`} onClick={() => { turnDial(g, a, index); save(); refresh(n => n + 1) }}><span>{['H', 'T', '*'][dial]}</span>{['LADDER', 'PICKAXE', 'SUN'][dial]}</button>)}</div>{a.solved && <p role="status">SEAL DECODED · Ancient walls unlocked.</p>}<small>You can close this notebook and return later.</small></>}</article>)}{legacy.artifacts.length > 0 && <div className="field-entry"><h2>PREVIOUS EXPEDITION ARCHIVE</h2><p>{legacy.artifacts.length} artifacts from your original save are preserved.</p>{legacy.artifacts.map(a => <p key={a.id}>{a.id} · {a.discoveredAt.slice(0, 10)}</p>)}</div>}</>}
       {panel === 'settings' && <><h2>COMFORT & SOUND</h2><div className="settings-toggles">{[['sound','Mining sounds'],['music','Ambient music'],['shake','Screen shake'],['reduced','Reduced motion'],['contrast','High-contrast targeting'],['vibration','Touch vibration'],['touch','Always show touch controls']].map(([key, label]) => <label key={key}><input type="checkbox" checked={settings[key]} onChange={e => setSettings(s => ({ ...s, [key]: e.target.checked }))} />{label}</label>)}</div><h2>TOUCH CONTROL PLATES</h2>{[['opacity','Opacity',.25,1,.05],['inset','Horizontal inset',0,90,1],['bottom','Bottom inset',0,90,1]].map(([key,label,min,max,stepValue]) => <label className="range-setting" key={key}>{label}<input type="range" min={min} max={max} step={stepValue} value={settings[key]} onChange={e => setSettings(s => ({ ...s, [key]: Number(e.target.value) }))} /><output>{key === 'opacity' ? `${Math.round(settings[key] * 100)}%` : `${settings[key]}px`}</output></label>)}<h2>KEY BINDINGS</h2><p className="fine-print">Select a binding, then press a key. Escape cancels. Conflicts swap places. Escape always closes a panel.</p><div className="key-bindings">{Object.entries(settings.keys).map(([action, code]) => <button key={action} onClick={() => setBinding(action)} onKeyDown={e => { if (binding === action) bind(e, action) }} aria-label={`Rebind ${action}, currently ${keyLabel(code)}`}><span>{action}</span><kbd>{binding === action ? 'PRESS KEY…' : keyLabel(code)}</kbd></button>)}</div><button onClick={() => setSettings(s => ({ ...s, keys: { ...DEFAULT_KEYS } }))}>RESTORE DEFAULT KEYS</button><h2>LOCAL SAVE</h2><div className="save-actions"><button onClick={exportSave}>EXPORT WORLD</button><label className="file-button">IMPORT WORLD<input type="file" accept="application/json" aria-label="Import world save, replaces current world" onChange={importSave} /></label><button onClick={() => open('reset')}>NEW EXPEDITION</button></div></>}
       {panel === 'reset' && <><p>This replaces your current world, discovery records, and in-game SOL balance. Export your world first if you want to keep it. Your original expedition archive is preserved.</p><button onClick={exportSave}>EXPORT CURRENT WORLD</button><button className="danger" onClick={() => { game.current = createGame(); resetAutonomy(); camera.current = { x: 0, y: 0 }; inspect.current = 0; gesture.current = null; reveal(game.current); save(); closePanel() }}>RESET & START AGAIN</button><button onClick={closePanel}>CANCEL — KEEP MY MINE</button></>}

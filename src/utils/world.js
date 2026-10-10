@@ -51,7 +51,8 @@ export function baseTile(x, y) {
 export function tile(g, x, y) { return g.removed[keyOf(x, y)] ? 'air' : baseTile(x, y) }
 export const solid = type => !!MATERIALS[type] || type === 'debris'
 export function createGame() {
-  return { player: { x: 9.15, y: 7.05, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false }, removed: {}, damage: {}, drops: [], inventory: {}, sol: emptySOL(), solSession: 0, artifacts: [], deepest: 0, broken: 0, tool: 0, heat: 0, cooldown: 0, target: { x: 9, y: 8 }, seen: {}, particles: [], time: 0, lastHit: -1, notice: 'Start here: hold DIG DOWN to break the floor. A / D to explore.', noticeUntil: 7, scanner: 0, scannerReady: 0, recover: 0, reactUntil: 0, shake: 0, lastMove: 0, checkpoint: { x: 9.15, y: 7.05 } }
+  const particleLimit = typeof navigator !== 'undefined' && ((navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory || 8) <= 4) ? 48 : 96
+  return { player: { x: 9.15, y: 7.05, vx: 0, vy: 0, facing: 1, state: 'idle', grounded: false }, removed: {}, damage: {}, drops: [], inventory: {}, sol: emptySOL(), solSession: 0, artifacts: [], deepest: 0, broken: 0, tool: 0, heat: 0, cooldown: 0, target: { x: 9, y: 8 }, seen: {}, particles: [], particleLimit, time: 0, lastHit: -1, notice: 'Your miner is inspecting the surrounding blocks.', noticeUntil: 7, scanner: 0, scannerReady: 0, recover: 0, reactUntil: 0, shake: 0, lastMove: 0, checkpoint: { x: 9.15, y: 7.05 } }
 }
 export function returnToSurface(g) {
   // The permanent entrance ladder stays usable even after the surface floor is mined out.
@@ -102,6 +103,7 @@ function collides(g, x, y) {
 }
 function burst(g, x, y, color, count = 7) {
   for (let i = 0; i < count; i++) g.particles.push({ x: x + .5, y: y + .5, vx: (i % 5 - 2) * 1.7, vy: -1 - i % 3, life: .3 + i * .025, color })
+  if (g.particles.length > g.particleLimit) g.particles.splice(0, g.particles.length - g.particleLimit)
 }
 export function turnDial(g, artifact, index) {
   if (artifact.outcome !== 'puzzle' || artifact.solved || !Number.isInteger(index) || index < 0 || index > 2) return
@@ -231,7 +233,7 @@ export function step(g, input, dt, settings = DEFAULT_SETTINGS) {
     g.inventory[drop.type] = (g.inventory[drop.type] || 0) + drop.amount
     const deposit = keyOf(drop.x, drop.y)
     awardSOL(g, `ore:${deposit}`, rewardAmount(drop.type, deposit), drop.type === 'sol' ? 'SOL CRYSTAL' : `${drop.type.toUpperCase()} DEPOSIT`)
-    p.state = 'celebrating'; g.reactUntil = g.time + .7; g.sound = drop.type === 'sol' ? 'crystal' : 'discovery'; if (drop.type === 'sol') g.shake = .6
+    p.state = 'celebrating'; g.reactUntil = g.time + .7; g.sound = drop.type === 'sol' ? 'crystal' : 'discovery'; if (drop.type === 'sol') g.shake = Math.min(.35, Math.max(g.shake, .35))
     return false
   })
   for (const particle of g.particles) { particle.x += particle.vx * dt; particle.y += particle.vy * dt; particle.vy += 12 * dt; particle.life -= dt }
