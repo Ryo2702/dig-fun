@@ -4,7 +4,7 @@ import { applyOfflineProgress, autoDecision, createAutonomy, finishPuzzle, resto
 import { activityConfig, minerTraits, pollLiveBuys, shortenAddress } from '../src/utils/activity.js'
 import { createGame, DEFAULT_SETTINGS, reveal, step } from '../src/utils/world.js'
 
-test('autonomy creates eight named simulated miners and survives a safe round trip', () => {
+test('autonomy creates eight named miners and survives a safe round trip', () => {
   const state = createAutonomy(100)
   assert.equal(state.miners.length, 8)
   assert.ok(state.miners.some(miner => miner.name === 'SOL Digger'))

@@ -9,7 +9,7 @@ export default function AutonomyOverlay({ state, offlineSummary, onDismissMajor,
   const [puzzleHidden, setPuzzleHidden] = useState(null)
   const [resultHidden, setResultHidden] = useState(null)
   const live = state.activity?.mode === 'live' && state.activity?.liveAvailable
-  const activityLabel = live ? 'LIVE ON-CHAIN ACTIVITY' : 'SIMULATED MINE ACTIVITY'
+  const activityLabel = live ? 'LIVE ON-CHAIN ACTIVITY' : 'MINE ACTIVITY'
 
   useEffect(() => {
     setPuzzleHidden(null)
@@ -40,7 +40,7 @@ export default function AutonomyOverlay({ state, offlineSummary, onDismissMajor,
     <AnimatePresence>
       {state.activity?.join && <motion.aside className="buyer-toast" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
         <button className="overlay-close" onClick={onDismissJoin} aria-label="Close">×</button>
-        <small>{state.activity.join.verified ? 'LIVE ON-CHAIN ACTIVITY' : 'SIMULATED MINE ACTIVITY'}</small>
+        <small>{state.activity.join.verified ? 'LIVE ON-CHAIN ACTIVITY' : 'MINE ACTIVITY'}</small>
         <strong>{state.activity.join.title}</strong>
         <span>{state.activity.join.name} · {formatPurchase(state.activity.join.amount, state.activity.join.unit)}</span>
         <b>{state.activity.join.subtitle}</b>

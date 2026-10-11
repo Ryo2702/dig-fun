@@ -131,7 +131,7 @@ export function createAutonomy(now = Date.now()) {
     noticeCurrent: null,
     noticeQueue: [],
     feed: [
-      'The mine is awake. Eight simulated crews are already moving.',
+      'The mine is awake. Eight crews are already moving.',
       'Diamond Hands has marked the lava route as “probably fine.”',
       'SOL Digger is searching for a crystal nobody has seen yet.',
     ],
@@ -335,7 +335,7 @@ function tierRank(id) {
 }
 
 function activityLabel(event) {
-  return event.verified ? 'LIVE ON-CHAIN ACTIVITY · RPC VERIFIED' : 'SIMULATED MINE ACTIVITY'
+  return event.verified ? 'LIVE ON-CHAIN ACTIVITY · RPC VERIFIED' : 'MINE ACTIVITY'
 }
 
 function communityBurst(g, tier) {
